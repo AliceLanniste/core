@@ -5,7 +5,7 @@ import {
   ParserPlugin,
   parse as babelParser
 } from '@babel/parser'
-import { Expression, Node, ObjectPattern, Program } from '@babel/types'
+import { Node, Program } from '@babel/types'
 import { generateCodeFrame } from '@vue/shared'
 
 export default class ScriptCompileContext {
