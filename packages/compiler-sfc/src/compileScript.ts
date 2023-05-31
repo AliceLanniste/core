@@ -60,7 +60,7 @@ import { rewriteDefaultAST } from './rewriteDefault'
 import { createCache } from './cache'
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
 import { transformDestructuredProps } from './script/propsDestructure'
-
+import { FromNormalScript } from './script/utils'
 // Special compiler macros
 const DEFINE_PROPS = 'defineProps'
 const DEFINE_EMITS = 'defineEmits'
@@ -149,8 +149,8 @@ export type PropsDestructureBindings = Record<
   }
 >
 
-type FromNormalScript<T> = T & { __fromNormalScript?: boolean | null }
-type PropsDeclType = FromNormalScript<TSTypeLiteral | TSInterfaceBody>
+// type FromNormalScript<T> = T & { __fromNormalScript?: boolean | null }
+export type PropsDeclType = FromNormalScript<TSTypeLiteral | TSInterfaceBody>
 type EmitsDeclType = FromNormalScript<
   TSFunctionType | TSTypeLiteral | TSInterfaceBody
 >
