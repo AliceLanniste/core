@@ -5,10 +5,17 @@ import {
   ParserPlugin,
   parse as babelParser
 } from '@babel/parser'
-import { Node, Program } from '@babel/types'
+import { Node, Program, Expression } from '@babel/types'
 import { generateCodeFrame } from '@vue/shared'
 
-export default class ScriptCompileContext {
+export type PropsDestructureBindings = Record<
+  string, // public prop key
+  {
+    local: string // local identifier, may be different
+    default?: Expression
+  }
+>
+export class ScriptCompileContext {
   isJS: boolean
   isTS: boolean
   scriptAst: Program | null
@@ -37,7 +44,7 @@ export default class ScriptCompileContext {
   propsDestructureDecl: Node | undefined
   propsDestructureRestId: string | undefined
   propsTypeDecl: PropsDeclType | undefined
-
+  propsDestructuredBindings: PropsDestructureBindings = Object.create(null)
   constructor(
     public descriptor: SFCDescriptor,
     public options: SFCScriptCompileOptions
@@ -108,6 +115,13 @@ export default class ScriptCompileContext {
         { plugins: [...plugins, 'topLevelAwait'], sourceType: 'module' },
         this.startOffset!
       )
+  }
+
+  getString(node: Node, scriptSetup = true): string {
+    const block = scriptSetup
+      ? this.descriptor.scriptSetup!
+      : this.descriptor.script!
+    return block.content.slice(node.start!, node.end!)
   }
 
   error(
