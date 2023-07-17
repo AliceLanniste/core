@@ -34,7 +34,6 @@ import {
   CallExpression,
   RestElement,
   TSInterfaceBody,
-  TSTypeElement,
   AwaitExpression,
   ObjectMethod,
   LVal,
@@ -63,11 +62,11 @@ import {
   PropsDeclType
 } from './script/defineProps'
 import { FromNormalScript, resolveObjectKey } from './script/utils'
+import { resolveQualifiedType } from './script/resolveType'
+
 // Special compiler macros
-// const DEFINE_PROPS = 'defineProps'
 const DEFINE_EMITS = 'defineEmits'
 const DEFINE_EXPOSE = 'defineExpose'
-// const WITH_DEFAULTS = 'withDefaults'
 const DEFINE_OPTIONS = 'defineOptions'
 const DEFINE_SLOTS = 'defineSlots'
 const DEFINE_MODEL = 'defineModel'
@@ -399,6 +398,7 @@ export function compileScript(
 
       const emitsTypeDeclRaw = node.typeParameters.params[0]
       emitsTypeDecl = resolveQualifiedType(
+        ctx,
         emitsTypeDeclRaw,
         node => node.type === 'TSFunctionType' || node.type === 'TSTypeLiteral'
       ) as EmitsDeclType | undefined
@@ -519,82 +519,6 @@ export function compileScript(
     return true
   }
 
-  function getAstBody(): Statement[] {
-    return scriptAst
-      ? [...scriptSetupAst.body, ...scriptAst.body]
-      : scriptSetupAst.body
-  }
-
-  function resolveExtendsType(
-    node: Node,
-    qualifier: (node: Node) => boolean,
-    cache: Array<Node> = []
-  ): Array<Node> {
-    if (node.type === 'TSInterfaceDeclaration' && node.extends) {
-      node.extends.forEach(extend => {
-        if (
-          extend.type === 'TSExpressionWithTypeArguments' &&
-          extend.expression.type === 'Identifier'
-        ) {
-          const body = getAstBody()
-          for (const node of body) {
-            const qualified = isQualifiedType(
-              node,
-              qualifier,
-              extend.expression.name
-            )
-            if (qualified) {
-              cache.push(qualified)
-              resolveExtendsType(node, qualifier, cache)
-              return cache
-            }
-          }
-        }
-      })
-    }
-    return cache
-  }
-
-  function isQualifiedType(
-    node: Node,
-    qualifier: (node: Node) => boolean,
-    refName: String
-  ): Node | undefined {
-    if (node.type === 'TSInterfaceDeclaration' && node.id.name === refName) {
-      return node.body
-    } else if (
-      node.type === 'TSTypeAliasDeclaration' &&
-      node.id.name === refName &&
-      qualifier(node.typeAnnotation)
-    ) {
-      return node.typeAnnotation
-    } else if (node.type === 'ExportNamedDeclaration' && node.declaration) {
-      return isQualifiedType(node.declaration, qualifier, refName)
-    }
-  }
-
-  // filter all extends types to keep the override declaration
-  function filterExtendsType(extendsTypes: Node[], bodies: TSTypeElement[]) {
-    extendsTypes.forEach(extend => {
-      const body = (extend as TSInterfaceBody).body
-      body.forEach(newBody => {
-        if (
-          newBody.type === 'TSPropertySignature' &&
-          newBody.key.type === 'Identifier'
-        ) {
-          const name = newBody.key.name
-          const hasOverride = bodies.some(
-            seenBody =>
-              seenBody.type === 'TSPropertySignature' &&
-              seenBody.key.type === 'Identifier' &&
-              seenBody.key.name === name
-          )
-          if (!hasOverride) bodies.push(newBody)
-        }
-      })
-    })
-  }
-
   function processDefineOptions(node: Node): boolean {
     if (!isCallOf(node, DEFINE_OPTIONS)) {
       return false
@@ -654,41 +578,6 @@ export function compileScript(
     }
 
     return true
-  }
-
-  function resolveQualifiedType(
-    node: Node,
-    qualifier: (node: Node) => boolean
-  ): Node | undefined {
-    if (qualifier(node)) {
-      return node
-    }
-    if (
-      node.type === 'TSTypeReference' &&
-      node.typeName.type === 'Identifier'
-    ) {
-      const refName = node.typeName.name
-      const body = getAstBody()
-      for (let i = 0; i < body.length; i++) {
-        const node = body[i]
-        let qualified = isQualifiedType(
-          node,
-          qualifier,
-          refName
-        ) as TSInterfaceBody
-        if (qualified) {
-          const extendsTypes = resolveExtendsType(node, qualifier)
-          if (extendsTypes.length) {
-            const bodies: TSTypeElement[] = [...qualified.body]
-            filterExtendsType(extendsTypes, bodies)
-            qualified.body = bodies
-          }
-          ;(qualified as FromNormalScript<Node>).__fromNormalScript =
-            scriptAst && i >= scriptSetupAst.body.length
-          return qualified
-        }
-      }
-    }
   }
 
   function processDefineExpose(node: Node): boolean {

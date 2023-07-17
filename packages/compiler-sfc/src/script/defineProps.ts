@@ -32,29 +32,30 @@ export function processDefineProps(
   ctx.hasDefinePropsCall = true
   ctx.propsRuntimeDecl = node.arguments[0]
 
-  if (node.typeArguments) {
+  // call has type parameters - infer runtime types from it
+  if (node.typeParameters) {
     if (ctx.propsRuntimeDecl) {
       ctx.error(
-        `${DEFINE_PROPS}() cannot accpet both type and non-type arguments` +
+        `${DEFINE_PROPS}() cannot accept both type and non-type arguments ` +
           `at the same time. Use one or the other.`,
         node
       )
     }
-  }
 
-  const rawDecl = node.typeArguments!.params[0]
-  ctx.propsTypeDecl = resolveQualifiedType(
-    ctx,
-    rawDecl,
-    node => node.type === 'TSTypeLiteral'
-  ) as PropsDeclType | undefined
+    const rawDecl = node.typeParameters.params[0]
+    ctx.propsTypeDecl = resolveQualifiedType(
+      ctx,
+      rawDecl,
+      node => node.type === 'TSTypeLiteral'
+    ) as PropsDeclType | undefined
 
-  if (!ctx.propsTypeDecl) {
-    ctx.error(
-      `type argument passed to ${DEFINE_PROPS}() must be a literal type, ` +
-        `or a reference to an interface or literal type.`,
-      node
-    )
+    if (!ctx.propsTypeDecl) {
+      ctx.error(
+        `type argument passed to ${DEFINE_PROPS}() must be a literal type, ` +
+          `or a reference to an interface or literal type.`,
+        node
+      )
+    }
   }
 
   if (declId) {

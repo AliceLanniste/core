@@ -89,7 +89,7 @@ function resolveExtendsType(
   }
   return cache
 }
-
+// filter all extends types to keep the override declaration
 function filterExtendsType(extendsTypes: Node[], bodies: TSTypeElement[]) {
   extendsTypes.forEach(extend => {
     const body = (extend as TSInterfaceBody).body
