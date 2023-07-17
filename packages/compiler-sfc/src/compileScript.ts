@@ -15,12 +15,7 @@ import {
   isCallOf
 } from '@vue/compiler-dom'
 import { DEFAULT_FILENAME, SFCDescriptor, SFCScriptBlock } from './parse'
-import {
-  parse as _parse,
-  parseExpression,
-  ParserOptions,
-  ParserPlugin
-} from '@babel/parser'
+import { parse as _parse, parseExpression, ParserPlugin } from '@babel/parser'
 import { camelize, capitalize, generateCodeFrame, makeMap } from '@vue/shared'
 import {
   Node,
@@ -41,7 +36,6 @@ import {
   TSInterfaceBody,
   TSTypeElement,
   AwaitExpression,
-  Program,
   ObjectMethod,
   LVal,
   Expression,
@@ -60,7 +54,7 @@ import { rewriteDefaultAST } from './rewriteDefault'
 import { createCache } from './cache'
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
 import { transformDestructuredProps } from './script/propsDestructure'
-
+import { ScriptCompileContext } from './script/context'
 // Special compiler macros
 const DEFINE_PROPS = 'defineProps'
 const DEFINE_EMITS = 'defineEmits'
@@ -195,41 +189,14 @@ export function compileScript(
     ? `const ${options.genDefaultAs} =`
     : `export default`
   const normalScriptDefaultVar = `__default__`
-  const isJS =
-    scriptLang === 'js' ||
-    scriptLang === 'jsx' ||
-    scriptSetupLang === 'js' ||
-    scriptSetupLang === 'jsx'
-  const isTS =
-    scriptLang === 'ts' ||
-    scriptLang === 'tsx' ||
-    scriptSetupLang === 'ts' ||
-    scriptSetupLang === 'tsx'
-
-  // resolve parser plugins
-  const plugins: ParserPlugin[] = []
-  if (!isTS || scriptLang === 'tsx' || scriptSetupLang === 'tsx') {
-    plugins.push('jsx')
-  } else {
-    // If don't match the case of adding jsx, should remove the jsx from the babelParserPlugins
-    if (options.babelParserPlugins)
-      options.babelParserPlugins = options.babelParserPlugins.filter(
-        n => n !== 'jsx'
-      )
-  }
-  if (options.babelParserPlugins) plugins.push(...options.babelParserPlugins)
-  if (isTS) {
-    plugins.push('typescript')
-    if (!plugins.includes('decorators')) {
-      plugins.push('decorators-legacy')
-    }
-  }
+  const ctx = new ScriptCompileContext(sfc, options)
+  const { isTS } = ctx
 
   if (!scriptSetup) {
     if (!script) {
       throw new Error(`[@vue/compiler-sfc] SFC contains no <script> tags.`)
     }
-    if (scriptLang && !isJS && !isTS) {
+    if (scriptLang && !ctx.isJS && !isTS) {
       // do not process non js/ts script blocks
       return script
     }
@@ -237,10 +204,7 @@ export function compileScript(
     try {
       let content = script.content
       let map = script.map
-      const scriptAst = _parse(content, {
-        plugins,
-        sourceType: 'module'
-      }).program
+      const scriptAst = ctx.scriptAST!
       const bindings = analyzeScriptBindings(scriptAst.body)
       if (enableReactivityTransform && shouldTransform(content)) {
         const s = new MagicString(source)
@@ -304,7 +268,7 @@ export function compileScript(
     )
   }
 
-  if (scriptSetupLang && !isJS && !isTS) {
+  if (scriptSetupLang && !ctx.isJS && !isTS) {
     // do not process non js/ts script blocks
     return scriptSetup
   }
@@ -358,21 +322,6 @@ export function compileScript(
   function helper(key: string): string {
     helperImports.add(key)
     return `_${key}`
-  }
-
-  function parse(
-    input: string,
-    options: ParserOptions,
-    offset: number
-  ): Program {
-    try {
-      return _parse(input, options).program
-    } catch (e: any) {
-      e.message = `[@vue/compiler-sfc] ${e.message}\n\n${
-        sfc.filename
-      }\n${generateCodeFrame(source, e.pos + offset, e.pos + offset + 1)}`
-      throw e
-    }
   }
 
   function error(
@@ -1260,30 +1209,9 @@ export function compileScript(
   }
 
   // 0. parse both <script> and <script setup> blocks
-  const scriptAst =
-    script &&
-    parse(
-      script.content,
-      {
-        plugins,
-        sourceType: 'module'
-      },
-      scriptStartOffset!
-    )
+  const scriptAst = script && ctx.scriptAST!
 
-  const scriptSetupAst = parse(
-    scriptSetup.content,
-    {
-      plugins: [
-        ...plugins,
-        // allow top level await but only inside <script setup>
-        'topLevelAwait'
-      ],
-      sourceType: 'module'
-    },
-    startOffset
-  )
-
+  const scriptSetupAst = ctx.scriptSetupAST!
   // 1.1 walk import delcarations of <script>
   if (scriptAst) {
     for (const node of scriptAst.body) {
