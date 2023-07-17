@@ -23,7 +23,15 @@ export class ScriptCompileContext {
   scriptStartOffset = this.descriptor.script?.loc.start.offset
   scriptEndOffset = this.descriptor.script?.loc.end.offset
 
+  // macros presence check
   hasDefinePropsCall = false
+  hasDefineEmitCall = false
+  hasDefineExposeCall = false
+  hasDefaultExportName = false
+  hasDefaultExportRender = false
+  hasDefineOptionsCall = false
+  hasDefineSlotsCall = false
+  hasDefineModelCall = false
 
   propsIdentifier: string | undefined
   propsRuntimeDecl: Node | undefined
