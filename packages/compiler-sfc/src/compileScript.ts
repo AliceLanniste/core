@@ -55,6 +55,7 @@ import { createCache } from './cache'
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
 import { transformDestructuredProps } from './script/propsDestructure'
 import { ScriptCompileContext } from './script/context'
+import { processDefineProps, processWithDefaults } from './script/defineProps'
 // Special compiler macros
 const DEFINE_PROPS = 'defineProps'
 const DEFINE_EMITS = 'defineEmits'
@@ -281,21 +282,6 @@ export function compileScript(
   const setupBindings: Record<string, BindingTypes> = Object.create(null)
 
   let defaultExport: Node | undefined
-  let hasDefinePropsCall = false
-  let hasDefineEmitCall = false
-  let hasDefineExposeCall = false
-  let hasDefaultExportName = false
-  let hasDefaultExportRender = false
-  let hasDefineOptionsCall = false
-  let hasDefineSlotsCall = false
-  let hasDefineModelCall = false
-  let propsRuntimeDecl: Node | undefined
-  let propsRuntimeDefaults: Node | undefined
-  let propsDestructureDecl: Node | undefined
-  let propsDestructureRestId: string | undefined
-  let propsTypeDecl: PropsDeclType | undefined
-  let propsTypeDeclRaw: Node | undefined
-  let propsIdentifier: string | undefined
   let emitsRuntimeDecl: Node | undefined
   let emitsTypeDecl: EmitsDeclType | undefined
   let emitIdentifier: string | undefined
@@ -388,136 +374,14 @@ export function compileScript(
     }
   }
 
-  function processDefineProps(node: Node, declId?: LVal): boolean {
-    if (!isCallOf(node, DEFINE_PROPS)) {
-      return false
-    }
-
-    if (hasDefinePropsCall) {
-      error(`duplicate ${DEFINE_PROPS}() call`, node)
-    }
-    hasDefinePropsCall = true
-
-    propsRuntimeDecl = node.arguments[0]
-
-    // call has type parameters - infer runtime types from it
-    if (node.typeParameters) {
-      if (propsRuntimeDecl) {
-        error(
-          `${DEFINE_PROPS}() cannot accept both type and non-type arguments ` +
-            `at the same time. Use one or the other.`,
-          node
-        )
-      }
-
-      propsTypeDeclRaw = node.typeParameters.params[0]
-      propsTypeDecl = resolveQualifiedType(
-        propsTypeDeclRaw,
-        node => node.type === 'TSTypeLiteral'
-      ) as PropsDeclType | undefined
-
-      if (!propsTypeDecl) {
-        error(
-          `type argument passed to ${DEFINE_PROPS}() must be a literal type, ` +
-            `or a reference to an interface or literal type.`,
-          propsTypeDeclRaw
-        )
-      }
-    }
-
-    if (declId) {
-      // handle props destructure
-      if (declId.type === 'ObjectPattern') {
-        propsDestructureDecl = declId
-        for (const prop of declId.properties) {
-          if (prop.type === 'ObjectProperty') {
-            const propKey = resolveObjectKey(prop.key, prop.computed)
-
-            if (!propKey) {
-              error(
-                `${DEFINE_PROPS}() destructure cannot use computed key.`,
-                prop.key
-              )
-            }
-
-            if (prop.value.type === 'AssignmentPattern') {
-              // default value { foo = 123 }
-              const { left, right } = prop.value
-              if (left.type !== 'Identifier') {
-                error(
-                  `${DEFINE_PROPS}() destructure does not support nested patterns.`,
-                  left
-                )
-              }
-              // store default value
-              propsDestructuredBindings[propKey] = {
-                local: left.name,
-                default: right
-              }
-            } else if (prop.value.type === 'Identifier') {
-              // simple destructure
-              propsDestructuredBindings[propKey] = {
-                local: prop.value.name
-              }
-            } else {
-              error(
-                `${DEFINE_PROPS}() destructure does not support nested patterns.`,
-                prop.value
-              )
-            }
-          } else {
-            // rest spread
-            propsDestructureRestId = (prop.argument as Identifier).name
-          }
-        }
-      } else {
-        propsIdentifier = scriptSetup!.content.slice(declId.start!, declId.end!)
-      }
-    }
-
-    return true
-  }
-
-  function processWithDefaults(node: Node, declId?: LVal): boolean {
-    if (!isCallOf(node, WITH_DEFAULTS)) {
-      return false
-    }
-    if (processDefineProps(node.arguments[0], declId)) {
-      if (propsRuntimeDecl) {
-        error(
-          `${WITH_DEFAULTS} can only be used with type-based ` +
-            `${DEFINE_PROPS} declaration.`,
-          node
-        )
-      }
-      if (propsDestructureDecl) {
-        error(
-          `${WITH_DEFAULTS}() is unnecessary when using destructure with ${DEFINE_PROPS}().\n` +
-            `Prefer using destructure default values, e.g. const { foo = 1 } = defineProps(...).`,
-          node.callee
-        )
-      }
-      propsRuntimeDefaults = node.arguments[1]
-      if (!propsRuntimeDefaults) {
-        error(`The 2nd argument of ${WITH_DEFAULTS} is required.`, node)
-      }
-    } else {
-      error(
-        `${WITH_DEFAULTS}' first argument must be a ${DEFINE_PROPS} call.`,
-        node.arguments[0] || node
-      )
-    }
-    return true
-  }
-
   function processDefineEmits(node: Node, declId?: LVal): boolean {
     if (!isCallOf(node, DEFINE_EMITS)) {
       return false
     }
-    if (hasDefineEmitCall) {
+    if (ctx.hasDefineEmitCall) {
       error(`duplicate ${DEFINE_EMITS}() call`, node)
     }
-    hasDefineEmitCall = true
+    ctx.hasDefineEmitCall = true
     emitsRuntimeDecl = node.arguments[0]
     if (node.typeParameters) {
       if (emitsRuntimeDecl) {
@@ -557,10 +421,10 @@ export function compileScript(
     if (!isCallOf(node, DEFINE_SLOTS)) {
       return false
     }
-    if (hasDefineSlotsCall) {
+    if (ctx.hasDefineSlotsCall) {
       error(`duplicate ${DEFINE_SLOTS}() call`, node)
     }
-    hasDefineSlotsCall = true
+    ctx.hasDefineSlotsCall = true
 
     if (node.arguments.length > 0) {
       error(`${DEFINE_SLOTS}() cannot accept arguments`, node)
@@ -581,7 +445,7 @@ export function compileScript(
     if (!enableDefineModel || !isCallOf(node, DEFINE_MODEL)) {
       return false
     }
-    hasDefineModelCall = true
+    ctx.hasDefineModelCall = true
 
     const type =
       (node.typeParameters && node.typeParameters.params[0]) || undefined
@@ -730,7 +594,7 @@ export function compileScript(
     if (!isCallOf(node, DEFINE_OPTIONS)) {
       return false
     }
-    if (hasDefineOptionsCall) {
+    if (ctx.hasDefineOptionsCall) {
       error(`duplicate ${DEFINE_OPTIONS}() call`, node)
     }
     if (node.typeParameters) {
@@ -738,7 +602,7 @@ export function compileScript(
     }
     if (!node.arguments[0]) return true
 
-    hasDefineOptionsCall = true
+    ctx.hasDefineOptionsCall = true
     optionsRuntimeDecl = unwrapTSNode(node.arguments[0])
 
     let propsOption = undefined
@@ -824,10 +688,10 @@ export function compileScript(
 
   function processDefineExpose(node: Node): boolean {
     if (isCallOf(node, DEFINE_EXPOSE)) {
-      if (hasDefineExposeCall) {
+      if (ctx.hasDefineExposeCall) {
         error(`duplicate ${DEFINE_EXPOSE}() call`, node)
       }
-      hasDefineExposeCall = true
+      ctx.hasDefineExposeCall = true
       return true
     }
     return false
@@ -907,9 +771,9 @@ export function compileScript(
    */
   function hasStaticWithDefaults() {
     return (
-      propsRuntimeDefaults &&
-      propsRuntimeDefaults.type === 'ObjectExpression' &&
-      propsRuntimeDefaults.properties.every(
+      ctx.propsRuntimeDefaults &&
+      ctx.propsRuntimeDefaults.type === 'ObjectExpression' &&
+      ctx.propsRuntimeDefaults.properties.every(
         node =>
           node.type !== 'SpreadElement' &&
           (!node.computed || node.key.type.endsWith('Literal'))
@@ -942,7 +806,7 @@ export function compileScript(
           }`
         } else if (hasStaticDefaults) {
           const prop = (
-            propsRuntimeDefaults as ObjectExpression
+            ctx.propsRuntimeDefaults as ObjectExpression
           ).properties.find(node => {
             if (node.type === 'SpreadElement') return false
             return resolveObjectKey(node.key, node.computed) === key
@@ -994,10 +858,10 @@ export function compileScript(
       })
       .join(',\n    ')}\n  }`
 
-      if (propsRuntimeDefaults && !hasStaticDefaults) {
+      if (ctx.propsRuntimeDefaults && !hasStaticDefaults) {
         propsDecls = `${helper('mergeDefaults')}(${propsDecls}, ${source.slice(
-          propsRuntimeDefaults.start! + startOffset,
-          propsRuntimeDefaults.end! + startOffset
+          ctx.propsRuntimeDefaults.start! + startOffset,
+          ctx.propsRuntimeDefaults.end! + startOffset
         )})`
       }
 
@@ -1005,7 +869,7 @@ export function compileScript(
     }
 
     function genModels() {
-      if (!hasDefineModelCall) return
+      if (!ctx.hasDefineModelCall) return
 
       let modelPropsDecl = ''
       for (const [name, { type, options }] of Object.entries(modelDecls)) {
@@ -1049,11 +913,11 @@ export function compileScript(
     }
 
     let propsDecls: undefined | string
-    if (propsRuntimeDecl) {
+    if (ctx.propsRuntimeDecl) {
       propsDecls = scriptSetup!.content
-        .slice(propsRuntimeDecl.start!, propsRuntimeDecl.end!)
+        .slice(ctx.propsRuntimeDecl.start!, ctx.propsRuntimeDecl.end!)
         .trim()
-      if (propsDestructureDecl) {
+      if (ctx.propsDestructureDecl) {
         const defaults: string[] = []
         for (const key in propsDestructuredBindings) {
           const d = genDestructuredDefaultValue(key)
@@ -1070,7 +934,7 @@ export function compileScript(
           )}(${propsDecls}, {\n  ${defaults.join(',\n  ')}\n})`
         }
       }
-    } else if (propsTypeDecl) {
+    } else if (ctx.propsTypeDecl) {
       propsDecls = genPropsFromTS()
     }
 
@@ -1153,13 +1017,15 @@ export function compileScript(
           m.key.type === 'Identifier'
         ) {
           if (
-            (propsRuntimeDefaults as ObjectExpression).properties.some(p => {
-              if (p.type === 'SpreadElement') return false
-              return (
-                resolveObjectKey(p.key, p.computed) ===
-                (m.key as Identifier).name
-              )
-            })
+            (ctx.propsRuntimeDefaults as ObjectExpression).properties.some(
+              p => {
+                if (p.type === 'SpreadElement') return false
+                return (
+                  resolveObjectKey(p.key, p.computed) ===
+                  (m.key as Identifier).name
+                )
+              }
+            )
           ) {
             res +=
               m.key.name +
@@ -1197,7 +1063,7 @@ export function compileScript(
     } else if (emitsTypeDecl) {
       emitsDecl = genEmitsFromTS()
     }
-    if (hasDefineModelCall) {
+    if (ctx.hasDefineModelCall) {
       let modelEmitsDecl = `[${Object.keys(modelDecls)
         .map(n => JSON.stringify(`update:${n}`))
         .join(', ')}]`
@@ -1335,7 +1201,7 @@ export function compileScript(
               s.key.type === 'Identifier' &&
               s.key.name === 'name'
             ) {
-              hasDefaultExportName = true
+              ctx.hasDefaultExportName = true
             }
             if (
               (s.type === 'ObjectMethod' || s.type === 'ObjectProperty') &&
@@ -1343,7 +1209,7 @@ export function compileScript(
               s.key.name === 'render'
             ) {
               // TODO warn when we provide a better way to do it?
-              hasDefaultExportRender = true
+              ctx.hasDefaultExportRender = true
             }
           }
         }
@@ -1459,10 +1325,10 @@ export function compileScript(
       const expr = unwrapTSNode(node.expression)
       // process `defineProps` and `defineEmit(s)` calls
       if (
-        processDefineProps(expr) ||
+        processDefineProps(ctx, expr) ||
         processDefineEmits(expr) ||
         processDefineOptions(expr) ||
-        processWithDefaults(expr) ||
+        processWithDefaults(ctx, expr) ||
         processDefineSlots(expr)
       ) {
         s.remove(node.start! + startOffset, node.end! + startOffset)
@@ -1497,8 +1363,8 @@ export function compileScript(
 
           // defineProps / defineEmits
           const isDefineProps =
-            processDefineProps(init, decl.id) ||
-            processWithDefaults(init, decl.id)
+            processDefineProps(ctx, init, decl.id) ||
+            processWithDefaults(ctx, init, decl.id)
           const isDefineEmits =
             !isDefineProps && processDefineEmits(init, decl.id)
           !isDefineEmits &&
@@ -1625,7 +1491,7 @@ export function compileScript(
   }
 
   // 3.1 props destructure transform
-  if (propsDestructureDecl) {
+  if (ctx.propsDestructureDecl) {
     transformDestructuredProps(
       scriptSetupAst,
       s,
@@ -1656,8 +1522,8 @@ export function compileScript(
   }
 
   // 4. extract runtime props/emits code from setup context type
-  if (propsTypeDecl) {
-    extractRuntimeProps(propsTypeDecl, typeDeclaredProps, declaredTypes)
+  if (ctx.propsTypeDecl) {
+    extractRuntimeProps(ctx.propsTypeDecl, typeDeclaredProps, declaredTypes)
   }
   if (emitsTypeDecl) {
     extractRuntimeEmits(emitsTypeDecl, typeDeclaredEmits, error)
@@ -1665,9 +1531,9 @@ export function compileScript(
 
   // 5. check macro args to make sure it doesn't reference setup scope
   // variables
-  checkInvalidScopeReference(propsRuntimeDecl, DEFINE_PROPS)
-  checkInvalidScopeReference(propsRuntimeDefaults, DEFINE_PROPS)
-  checkInvalidScopeReference(propsDestructureDecl, DEFINE_PROPS)
+  checkInvalidScopeReference(ctx.propsRuntimeDecl, DEFINE_PROPS)
+  checkInvalidScopeReference(ctx.propsRuntimeDefaults, DEFINE_PROPS)
+  checkInvalidScopeReference(ctx.propsDestructureDecl, DEFINE_PROPS)
   checkInvalidScopeReference(emitsRuntimeDecl, DEFINE_EMITS)
   checkInvalidScopeReference(optionsRuntimeDecl, DEFINE_OPTIONS)
 
@@ -1694,8 +1560,8 @@ export function compileScript(
   if (scriptAst) {
     Object.assign(bindingMetadata, analyzeScriptBindings(scriptAst.body))
   }
-  if (propsRuntimeDecl) {
-    for (const key of getObjectOrArrayExpressionKeys(propsRuntimeDecl)) {
+  if (ctx.propsRuntimeDecl) {
+    for (const key of getObjectOrArrayExpressionKeys(ctx.propsRuntimeDecl)) {
       bindingMetadata[key] = BindingTypes.PROPS
     }
   }
@@ -1706,9 +1572,9 @@ export function compileScript(
     bindingMetadata[key] = BindingTypes.PROPS
   }
   // props aliases
-  if (propsDestructureDecl) {
-    if (propsDestructureRestId) {
-      bindingMetadata[propsDestructureRestId] =
+  if (ctx.propsDestructureDecl) {
+    if (ctx.propsDestructureRestId) {
+      bindingMetadata[ctx.propsDestructureRestId] =
         BindingTypes.SETUP_REACTIVE_CONST
     }
     for (const key in propsDestructuredBindings) {
@@ -1760,7 +1626,7 @@ export function compileScript(
 
   // 9. finalize setup() argument signature
   let args = `__props`
-  if (propsTypeDecl) {
+  if (ctx.propsTypeDecl) {
     // mark as any and only cast on assignment
     // since the user defined complex types may be incompatible with the
     // inferred type from generated runtime declarations
@@ -1769,18 +1635,18 @@ export function compileScript(
   // inject user assignment of props
   // we use a default __props so that template expressions referencing props
   // can use it directly
-  if (propsIdentifier) {
+  if (ctx.propsIdentifier) {
     s.prependLeft(
       startOffset,
-      `\nconst ${propsIdentifier} = __props${
-        propsTypeDecl ? ` as ${genSetupPropsType(propsTypeDecl)}` : ``
+      `\nconst ${ctx.propsIdentifier} = __props${
+        ctx.propsTypeDecl ? ` as ${genSetupPropsType(ctx.propsTypeDecl)}` : ``
       };\n`
     )
   }
-  if (propsDestructureRestId) {
+  if (ctx.propsDestructureRestId) {
     s.prependLeft(
       startOffset,
-      `\nconst ${propsDestructureRestId} = ${helper(
+      `\nconst ${ctx.propsDestructureRestId} = ${helper(
         `createPropsRestProxy`
       )}(__props, ${JSON.stringify(Object.keys(propsDestructuredBindings))});\n`
     )
@@ -1792,7 +1658,9 @@ export function compileScript(
   }
 
   const destructureElements =
-    hasDefineExposeCall || !options.inlineTemplate ? [`expose: __expose`] : []
+    ctx.hasDefineExposeCall || !options.inlineTemplate
+      ? [`expose: __expose`]
+      : []
   if (emitIdentifier) {
     destructureElements.push(
       emitIdentifier === `emit` ? `emit` : `emit: ${emitIdentifier}`
@@ -1804,7 +1672,10 @@ export function compileScript(
 
   // 10. generate return statement
   let returned
-  if (!options.inlineTemplate || (!sfc.template && hasDefaultExportRender)) {
+  if (
+    !options.inlineTemplate ||
+    (!sfc.template && ctx.hasDefaultExportRender)
+  ) {
     // non-inline mode, or has manual render in normal <script>
     // return bindings from script and script setup
     const allBindings: Record<string, any> = {
@@ -1914,7 +1785,7 @@ export function compileScript(
 
   // 11. finalize default export
   let runtimeOptions = ``
-  if (!hasDefaultExportName && filename && filename !== DEFAULT_FILENAME) {
+  if (!ctx.hasDefaultExportName && filename && filename !== DEFAULT_FILENAME) {
     const match = filename.match(/([^/\\]+)\.\w+$/)
     if (match) {
       runtimeOptions += `\n  __name: '${match[1]}',`
@@ -1940,7 +1811,7 @@ export function compileScript(
   // <script setup> components are closed by default. If the user did not
   // explicitly call `defineExpose`, call expose() with no args.
   const exposeCall =
-    hasDefineExposeCall || options.inlineTemplate ? `` : `  __expose();\n`
+    ctx.hasDefineExposeCall || options.inlineTemplate ? `` : `  __expose();\n`
   // wrap setup code with function.
   if (isTS) {
     // for TS, make sure the exported type is still valid type with
