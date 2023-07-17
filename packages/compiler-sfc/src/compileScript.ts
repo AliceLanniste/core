@@ -58,8 +58,7 @@ import {
   processDefineProps,
   processWithDefaults,
   DEFINE_PROPS,
-  WITH_DEFAULTS,
-  PropsDeclType
+  WITH_DEFAULTS
 } from './script/defineProps'
 import { FromNormalScript, resolveObjectKey } from './script/utils'
 import { resolveQualifiedType } from './script/resolveType'
@@ -894,52 +893,6 @@ export function compileScript(
     }
   }
 
-  function genSetupPropsType(node: PropsDeclType) {
-    const scriptSource = node.__fromNormalScript
-      ? script!.content
-      : scriptSetup!.content
-    if (hasStaticWithDefaults()) {
-      // if withDefaults() is used, we need to remove the optional flags
-      // on props that have default values
-      let res = `{ `
-      const members = node.type === 'TSTypeLiteral' ? node.members : node.body
-      for (const m of members) {
-        if (
-          (m.type === 'TSPropertySignature' ||
-            m.type === 'TSMethodSignature') &&
-          m.typeAnnotation &&
-          m.key.type === 'Identifier'
-        ) {
-          if (
-            (ctx.propsRuntimeDefaults as ObjectExpression).properties.some(
-              p => {
-                if (p.type === 'SpreadElement') return false
-                return (
-                  resolveObjectKey(p.key, p.computed) ===
-                  (m.key as Identifier).name
-                )
-              }
-            )
-          ) {
-            res +=
-              m.key.name +
-              (m.type === 'TSMethodSignature' ? '()' : '') +
-              scriptSource.slice(
-                m.typeAnnotation.start!,
-                m.typeAnnotation.end!
-              ) +
-              ', '
-          } else {
-            res += scriptSource.slice(m.start!, m.typeAnnotation.end!) + `, `
-          }
-        }
-      }
-      return (res.length ? res.slice(0, -2) : res) + ` }`
-    } else {
-      return scriptSource.slice(node.start!, node.end!)
-    }
-  }
-
   function genRuntimeEmits() {
     function genEmitsFromTS() {
       return typeDeclaredEmits.size
@@ -1530,12 +1483,7 @@ export function compileScript(
   // we use a default __props so that template expressions referencing props
   // can use it directly
   if (ctx.propsIdentifier) {
-    s.prependLeft(
-      startOffset,
-      `\nconst ${ctx.propsIdentifier} = __props${
-        ctx.propsTypeDecl ? ` as ${genSetupPropsType(ctx.propsTypeDecl)}` : ``
-      };\n`
-    )
+    s.prependLeft(startOffset, `\nconst ${ctx.propsIdentifier} = __props;\n`)
   }
   if (ctx.propsDestructureRestId) {
     s.prependLeft(
