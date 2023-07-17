@@ -8,7 +8,7 @@ import {
 import { ScriptCompileContext } from './context'
 import { isCallOf } from '@vue/compiler-dom'
 import { resolveQualifiedType } from './resolveType'
-import { resolveObjectKey } from '../compileScript'
+import { resolveObjectKey } from './utils'
 
 export const DEFINE_PROPS = 'defineProps'
 export const WITH_DEFAULTS = 'withDefaults'

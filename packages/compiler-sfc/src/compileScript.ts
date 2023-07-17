@@ -55,12 +55,19 @@ import { createCache } from './cache'
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
 import { transformDestructuredProps } from './script/propsDestructure'
 import { ScriptCompileContext } from './script/context'
-import { processDefineProps, processWithDefaults } from './script/defineProps'
+import {
+  processDefineProps,
+  processWithDefaults,
+  DEFINE_PROPS,
+  WITH_DEFAULTS,
+  PropsDeclType
+} from './script/defineProps'
+import { FromNormalScript, resolveObjectKey } from './script/utils'
 // Special compiler macros
-const DEFINE_PROPS = 'defineProps'
+// const DEFINE_PROPS = 'defineProps'
 const DEFINE_EMITS = 'defineEmits'
 const DEFINE_EXPOSE = 'defineExpose'
-const WITH_DEFAULTS = 'withDefaults'
+// const WITH_DEFAULTS = 'withDefaults'
 const DEFINE_OPTIONS = 'defineOptions'
 const DEFINE_SLOTS = 'defineSlots'
 const DEFINE_MODEL = 'defineModel'
@@ -144,8 +151,6 @@ export type PropsDestructureBindings = Record<
   }
 >
 
-type FromNormalScript<T> = T & { __fromNormalScript?: boolean | null }
-type PropsDeclType = FromNormalScript<TSTypeLiteral | TSInterfaceBody>
 type EmitsDeclType = FromNormalScript<
   TSFunctionType | TSTypeLiteral | TSInterfaceBody
 >
@@ -2691,15 +2696,4 @@ export function hmrShouldReload(
   }
 
   return false
-}
-
-export function resolveObjectKey(node: Node, computed: boolean) {
-  switch (node.type) {
-    case 'StringLiteral':
-    case 'NumericLiteral':
-      return node.value
-    case 'Identifier':
-      if (!computed) return node.name
-  }
-  return undefined
 }
