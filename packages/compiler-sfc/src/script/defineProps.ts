@@ -3,19 +3,44 @@ import {
   LVal,
   TSTypeLiteral,
   TSInterfaceBody,
-  Identifier
+  Identifier,
+  Expression,
+  ObjectExpression,
+  ObjectProperty,
+  ObjectMethod
 } from '@babel/types'
 import { ScriptCompileContext } from './context'
-import { isCallOf } from '@vue/compiler-dom'
-import { resolveQualifiedType } from './resolveType'
-import { resolveObjectKey } from './utils'
+import { isCallOf, isFunctionType, unwrapTSNode } from '@vue/compiler-dom'
+import { inferRuntimeType, resolveQualifiedType } from './resolveType'
+import {
+  resolveObjectKey,
+  FromNormalScript,
+  UNKNOWN_TYPE,
+  isLiteralNode,
+  concatStrings,
+  toRunTimeTypeString
+} from './utils'
+import { genModels } from './defineModel'
 
 export const DEFINE_PROPS = 'defineProps'
 export const WITH_DEFAULTS = 'withDefaults'
 
-export type PropsDeclType = (TSTypeLiteral | TSInterfaceBody) & {
-  __fromNormalScript?: boolean | null
+export type PropsDeclType = FromNormalScript<TSTypeLiteral | TSInterfaceBody>
+
+export interface PropTypeData {
+  key: string
+  type: string[]
+  required: boolean
+  skipCheck: boolean
 }
+
+export type PropsDestructureBindings = Record<
+  string, //public prop key
+  {
+    local: string //local identifier,
+    default?: Expression
+  }
+>
 
 export function processDefineProps(
   ctx: ScriptCompileContext,
@@ -145,3 +170,229 @@ export function processWithDefaults(
   }
   return true
 }
+
+export function extractRuntimeProps(ctx: ScriptCompileContext) {
+  const node = ctx.propsTypeDecl
+  if (!node) return
+  const members = node.type === 'TSTypeLiteral' ? node.members : node.body
+  for (const member of members) {
+    if (
+      (member.type === 'TSPropertySignature' ||
+        member.type === 'TSMethodSignature') &&
+      member.key.type === 'Identifier'
+    ) {
+      let type: string[] | undefined
+      let skipCheck = false
+      if (member.type === 'TSMethodSignature') {
+        type = ['Function']
+      } else if (member.typeAnnotation) {
+        type = inferRuntimeType(
+          member.typeAnnotation.typeAnnotation,
+          ctx.declaredTypes
+        )
+        //skip check for result containing unknowm types
+        if (type?.includes(UNKNOWN_TYPE)) {
+          if (type.includes('Boolean') || type.includes('Function')) {
+            type = type.filter(t => t !== UNKNOWN_TYPE)
+            skipCheck = true
+          } else {
+            type = ['null']
+          }
+        }
+      }
+      ctx.typeDeclaredProps[member.key.name] = {
+        key: member.key.name,
+        required: !member.optional,
+        type: type || [`null`],
+        skipCheck
+      }
+    }
+  }
+}
+
+export function genRuntimeProps(ctx: ScriptCompileContext): string | undefined {
+  let propsDecls: undefined | string
+  if (ctx.propsRuntimeDecl) {
+    propsDecls = ctx.getString(ctx.propsRuntimeDecl).trim()
+    if (ctx.propsDestructureDecl) {
+      const defaults: string[] = []
+      for (const key in ctx.propsDestructuredBindings) {
+        const d = genDestructuredDefaultValue(ctx, key)
+        if (d)
+          defaults.push(
+            `${key}:${d.valueString}${
+              d.needSkipFactory ? `__skip${key}:true` : ``
+            }`
+          )
+      }
+      if (defaults.length) {
+        propsDecls = `${ctx.helper(
+          `mergeDefaults`
+        )}(${propsDecls},{\n ${defaults.join(',\n  ')} \n})`
+      }
+    }
+  } else if (ctx.propsTypeDecl) {
+    propsDecls = genPropsFromTS(ctx)
+  }
+  const modelsDecls = genModels(ctx)
+
+  if (propsDecls && modelsDecls) {
+    return `${ctx.helper('mergeModels')}(${propsDecls},${modelsDecls})`
+  } else {
+    return modelsDecls || propsDecls
+  }
+}
+
+function genDestructuredDefaultValue(
+  ctx: ScriptCompileContext,
+  key: string,
+  inferredType?: string[]
+):
+  | {
+      valueString: string
+      needSkipFactory: boolean
+    }
+  | undefined {
+  const destructured = ctx.propsDestructuredBindings[key]
+  const defaultVal = destructured && destructured.default
+  if (defaultVal) {
+    const value = ctx.getString(defaultVal)
+    const unwrapped = unwrapTSNode(defaultVal)
+
+    if (
+      inferredType &&
+      inferredType.length &&
+      !inferredType.includes(UNKNOWN_TYPE)
+    ) {
+      const valueType = inferValueType(unwrapped)
+      if (valueType && !inferredType.includes(valueType)) {
+        ctx.error(
+          `Default value of prop "${key}" does not match declared type.`,
+          unwrapped
+        )
+      }
+    }
+
+    const needSkipFactory =
+      !inferredType &&
+      (isFunctionType(unwrapped) || unwrapped.type === 'Identifier')
+
+    const needFactoryWrap =
+      !needSkipFactory &&
+      !isLiteralNode(unwrapped) &&
+      !inferredType?.includes('Function')
+
+    return {
+      valueString: needFactoryWrap ? `()=>(${value})` : value,
+      needSkipFactory
+    }
+  }
+}
+
+function inferValueType(node: Node): string | undefined {
+  switch (node.type) {
+    case 'StringLiteral':
+      return 'String'
+    case 'NumberLiteral':
+      return 'Number'
+    case 'BooleanLiteral':
+      return 'Boolean'
+    case 'ObjectExpression':
+      return 'Object'
+    case 'ArrayExpression':
+      return 'Array'
+    case 'FunctionExpression':
+    case 'ArrowFunctionExpression':
+      return 'Function'
+  }
+}
+
+function genPropsFromTS(ctx: ScriptCompileContext) {
+  const keys = Object.keys(ctx.typeDeclaredProps)
+  if (!keys.length) return
+
+  const hasStaticDefaults = hasStaticWithDefaults(ctx)
+  let propsDecls = `{
+            ${keys
+              .map(key => {
+                let defaultString: string | undefined
+                const destructured = genDestructuredDefaultValue(
+                  ctx,
+                  key,
+                  ctx.typeDeclaredProps[key].type
+                )
+                if (destructured) {
+                  defaultString = `default: ${destructured.valueString}${
+                    destructured.needSkipFactory ? `, skipFactory: true` : ``
+                  }`
+                } else if (hasStaticDefaults) {
+                  const prop = (
+                    ctx.propsRuntimeDefaults as ObjectExpression
+                  ).properties.find(node => {
+                    if (node.type === 'SpreadElement') return false
+                    return resolveObjectKey(node.key, node.computed) === key
+                  }) as ObjectProperty | ObjectMethod
+                  if (prop) {
+                    if (prop.type === 'ObjectProperty') {
+                      // prop has corresponding static default value
+                      defaultString = `default: ${ctx.getString(prop.value)}`
+                    } else {
+                      defaultString = `${prop.async ? 'async ' : ''}${
+                        prop.kind !== 'method' ? `${prop.key} ` : ''
+                      }default() ${ctx.getString(prop.body)}`
+                    }
+                  }
+                }
+                const { type, required, skipCheck } = ctx.typeDeclaredProps[key]
+                if (!ctx.options.isProd) {
+                  return `${key}: { ${concatStrings([
+                    `type: ${toRunTimeTypeString(type)}`,
+                    `required: ${required}`,
+                    skipCheck && 'skipCheck: true',
+                    defaultString
+                  ])}}`
+                } else if (
+                  type.some(
+                    el =>
+                      el === 'Boolean' ||
+                      ((!hasStaticDefaults || defaultString) &&
+                        el === 'Function')
+                  )
+                ) {
+                  return `${key}: { ${concatStrings([
+                    `type: ${toRunTimeTypeString(type)}`,
+                    defaultString
+                  ])}}`
+                } else {
+                  //
+                  return `${key}: ${
+                    defaultString ? `{ ${defaultString} }` : `{}`
+                  }`
+                }
+              })
+              .join(',\n ')}\n }`
+
+  if (ctx.propsRuntimeDefaults && !hasStaticDefaults) {
+    propsDecls = `${ctx.helper('mergeDefaults')}(${propsDecls}, ${ctx.getString(
+      ctx.propsRuntimeDefaults
+    )})`
+  }
+
+  return propsDecls
+}
+
+function hasStaticWithDefaults(ctx: ScriptCompileContext) {
+  return (
+    ctx.propsRuntimeDefaults &&
+    ctx.propsRuntimeDefaults.type === 'ObjectExpression' &&
+    ctx.propsRuntimeDefaults.properties.every(
+      node =>
+        node.type !== 'SpreadElement' &&
+        (!node.computed || node.key.type.endsWith('Literal'))
+    )
+  )
+}
+
+// function toRuntimeTypeString(type: string[]) {
+// throw new Error('Function not implemented.')
+// }
