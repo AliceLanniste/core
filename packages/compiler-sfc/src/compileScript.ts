@@ -10,9 +10,7 @@ import {
   SimpleExpressionNode,
   isFunctionType,
   walkIdentifiers,
-  getImportedName,
-  unwrapTSNode,
-  isCallOf
+  getImportedName
 } from '@vue/compiler-dom'
 import { DEFAULT_FILENAME, SFCDescriptor, SFCScriptBlock } from './parse'
 import { parse as _parse, parseExpression, ParserPlugin } from '@babel/parser'
@@ -60,7 +58,12 @@ import {
   DEFINE_PROPS,
   WITH_DEFAULTS
 } from './script/defineProps'
-import { FromNormalScript, resolveObjectKey } from './script/utils'
+import {
+  FromNormalScript,
+  isCallOf,
+  resolveObjectKey,
+  unwrapTSNode
+} from './script/utils'
 import { resolveQualifiedType } from './script/resolveType'
 
 // Special compiler macros

@@ -10,7 +10,8 @@ import {
   ObjectMethod
 } from '@babel/types'
 import { ScriptCompileContext } from './context'
-import { isCallOf, isFunctionType, unwrapTSNode } from '@vue/compiler-dom'
+import { isFunctionType } from '@vue/compiler-dom'
+import { isCallOf, unwrapTSNode } from './utils'
 import { inferRuntimeType, resolveQualifiedType } from './resolveType'
 import {
   resolveObjectKey,
