@@ -50,7 +50,7 @@ import { warnOnce } from './warn'
 import { rewriteDefaultAST } from './rewriteDefault'
 import { createCache } from './cache'
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
-import { transformDestructuredProps } from './script/propsDestructure'
+import { transformDestructuredProps } from './script/definePropsDestructure'
 import { ScriptCompileContext } from './script/context'
 import {
   processDefineProps,
