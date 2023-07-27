@@ -33,7 +33,6 @@ import {
   RestElement,
   TSInterfaceBody,
   AwaitExpression,
-  ObjectMethod,
   LVal,
   Expression,
   TSEnumDeclaration
@@ -56,7 +55,10 @@ import {
   processDefineProps,
   processWithDefaults,
   DEFINE_PROPS,
-  WITH_DEFAULTS
+  WITH_DEFAULTS,
+  extractRuntimeProps,
+  genRuntimeProps,
+  PropTypeData
 } from './script/defineProps'
 import {
   FromNormalScript,
@@ -64,7 +66,7 @@ import {
   resolveObjectKey,
   unwrapTSNode
 } from './script/utils'
-import { resolveQualifiedType } from './script/resolveType'
+import { inferRuntimeType, resolveQualifiedType } from './script/resolveType'
 
 // Special compiler macros
 const DEFINE_EMITS = 'defineEmits'
@@ -299,7 +301,7 @@ export function compileScript(
   const typeDeclaredProps: Record<string, PropTypeData> = {}
   const typeDeclaredEmits: Set<string> = new Set()
   // record declared types for runtime props type generation
-  const declaredTypes: Record<string, string[]> = {}
+  // const declaredTypes: Record<string, string[]> = {}
   // props destructure data
   const propsDestructuredBindings: PropsDestructureBindings =
     Object.create(null)
@@ -665,236 +667,6 @@ export function compileScript(
    * static properties, we can directly generate more optimized default
    * declarations. Otherwise we will have to fallback to runtime merging.
    */
-  function hasStaticWithDefaults() {
-    return (
-      ctx.propsRuntimeDefaults &&
-      ctx.propsRuntimeDefaults.type === 'ObjectExpression' &&
-      ctx.propsRuntimeDefaults.properties.every(
-        node =>
-          node.type !== 'SpreadElement' &&
-          (!node.computed || node.key.type.endsWith('Literal'))
-      )
-    )
-  }
-
-  function concatStrings(strs: Array<string | null | undefined | false>) {
-    return strs.filter((s): s is string => !!s).join(', ')
-  }
-
-  function genRuntimeProps() {
-    function genPropsFromTS() {
-      const keys = Object.keys(typeDeclaredProps)
-      if (!keys.length) return
-
-      const hasStaticDefaults = hasStaticWithDefaults()
-      const scriptSetupSource = scriptSetup!.content
-      let propsDecls = `{
-    ${keys
-      .map(key => {
-        let defaultString: string | undefined
-        const destructured = genDestructuredDefaultValue(
-          key,
-          typeDeclaredProps[key].type
-        )
-        if (destructured) {
-          defaultString = `default: ${destructured.valueString}${
-            destructured.needSkipFactory ? `, skipFactory: true` : ``
-          }`
-        } else if (hasStaticDefaults) {
-          const prop = (
-            ctx.propsRuntimeDefaults as ObjectExpression
-          ).properties.find(node => {
-            if (node.type === 'SpreadElement') return false
-            return resolveObjectKey(node.key, node.computed) === key
-          }) as ObjectProperty | ObjectMethod
-          if (prop) {
-            if (prop.type === 'ObjectProperty') {
-              // prop has corresponding static default value
-              defaultString = `default: ${scriptSetupSource.slice(
-                prop.value.start!,
-                prop.value.end!
-              )}`
-            } else {
-              defaultString = `${prop.async ? 'async ' : ''}${
-                prop.kind !== 'method' ? `${prop.kind} ` : ''
-              }default() ${scriptSetupSource.slice(
-                prop.body.start!,
-                prop.body.end!
-              )}`
-            }
-          }
-        }
-
-        const { type, required, skipCheck } = typeDeclaredProps[key]
-        if (!isProd) {
-          return `${key}: { ${concatStrings([
-            `type: ${toRuntimeTypeString(type)}`,
-            `required: ${required}`,
-            skipCheck && 'skipCheck: true',
-            defaultString
-          ])} }`
-        } else if (
-          type.some(
-            el =>
-              el === 'Boolean' ||
-              ((!hasStaticDefaults || defaultString) && el === 'Function')
-          )
-        ) {
-          // #4783 for boolean, should keep the type
-          // #7111 for function, if default value exists or it's not static, should keep it
-          // in production
-          return `${key}: { ${concatStrings([
-            `type: ${toRuntimeTypeString(type)}`,
-            defaultString
-          ])} }`
-        } else {
-          // production: checks are useless
-          return `${key}: ${defaultString ? `{ ${defaultString} }` : `{}`}`
-        }
-      })
-      .join(',\n    ')}\n  }`
-
-      if (ctx.propsRuntimeDefaults && !hasStaticDefaults) {
-        propsDecls = `${helper('mergeDefaults')}(${propsDecls}, ${source.slice(
-          ctx.propsRuntimeDefaults.start! + startOffset,
-          ctx.propsRuntimeDefaults.end! + startOffset
-        )})`
-      }
-
-      return propsDecls
-    }
-
-    function genModels() {
-      if (!ctx.hasDefineModelCall) return
-
-      let modelPropsDecl = ''
-      for (const [name, { type, options }] of Object.entries(modelDecls)) {
-        let skipCheck = false
-
-        let runtimeTypes = type && inferRuntimeType(type, declaredTypes)
-        if (runtimeTypes) {
-          const hasUnknownType = runtimeTypes.includes(UNKNOWN_TYPE)
-
-          runtimeTypes = runtimeTypes.filter(el => {
-            if (el === UNKNOWN_TYPE) return false
-            return isProd
-              ? el === 'Boolean' || (el === 'Function' && options)
-              : true
-          })
-          skipCheck = !isProd && hasUnknownType && runtimeTypes.length > 0
-        }
-
-        let runtimeType =
-          (runtimeTypes &&
-            runtimeTypes.length > 0 &&
-            toRuntimeTypeString(runtimeTypes)) ||
-          undefined
-
-        const codegenOptions = concatStrings([
-          runtimeType && `type: ${runtimeType}`,
-          skipCheck && 'skipCheck: true'
-        ])
-
-        let decl: string
-        if (runtimeType && options) {
-          decl = isTS
-            ? `{ ${codegenOptions}, ...${options} }`
-            : `Object.assign({ ${codegenOptions} }, ${options})`
-        } else {
-          decl = options || (runtimeType ? `{ ${codegenOptions} }` : '{}')
-        }
-        modelPropsDecl += `\n    ${JSON.stringify(name)}: ${decl},`
-      }
-      return `{${modelPropsDecl}\n  }`
-    }
-
-    let propsDecls: undefined | string
-    if (ctx.propsRuntimeDecl) {
-      propsDecls = scriptSetup!.content
-        .slice(ctx.propsRuntimeDecl.start!, ctx.propsRuntimeDecl.end!)
-        .trim()
-      if (ctx.propsDestructureDecl) {
-        const defaults: string[] = []
-        for (const key in propsDestructuredBindings) {
-          const d = genDestructuredDefaultValue(key)
-          if (d)
-            defaults.push(
-              `${key}: ${d.valueString}${
-                d.needSkipFactory ? `, __skip_${key}: true` : ``
-              }`
-            )
-        }
-        if (defaults.length) {
-          propsDecls = `${helper(
-            `mergeDefaults`
-          )}(${propsDecls}, {\n  ${defaults.join(',\n  ')}\n})`
-        }
-      }
-    } else if (ctx.propsTypeDecl) {
-      propsDecls = genPropsFromTS()
-    }
-
-    const modelsDecls = genModels()
-
-    if (propsDecls && modelsDecls) {
-      return `${helper('mergeModels')}(${propsDecls}, ${modelsDecls})`
-    } else {
-      return modelsDecls || propsDecls
-    }
-  }
-
-  function genDestructuredDefaultValue(
-    key: string,
-    inferredType?: string[]
-  ):
-    | {
-        valueString: string
-        needSkipFactory: boolean
-      }
-    | undefined {
-    const destructured = propsDestructuredBindings[key]
-    const defaultVal = destructured && destructured.default
-    if (defaultVal) {
-      const value = scriptSetup!.content.slice(
-        defaultVal.start!,
-        defaultVal.end!
-      )
-
-      const unwrapped = unwrapTSNode(defaultVal)
-
-      if (
-        inferredType &&
-        inferredType.length &&
-        !inferredType.includes(UNKNOWN_TYPE)
-      ) {
-        const valueType = inferValueType(unwrapped)
-        if (valueType && !inferredType.includes(valueType)) {
-          error(
-            `Default value of prop "${key}" does not match declared type.`,
-            unwrapped
-          )
-        }
-      }
-
-      // If the default value is a function or is an identifier referencing
-      // external value, skip factory wrap. This is needed when using
-      // destructure w/ runtime declaration since we cannot safely infer
-      // whether tje expected runtime prop type is `Function`.
-      const needSkipFactory =
-        !inferredType &&
-        (isFunctionType(unwrapped) || unwrapped.type === 'Identifier')
-
-      const needFactoryWrap =
-        !needSkipFactory &&
-        !isLiteralNode(unwrapped) &&
-        !inferredType?.includes('Function')
-
-      return {
-        valueString: needFactoryWrap ? `() => (${value})` : value,
-        needSkipFactory
-      }
-    }
-  }
 
   function genRuntimeEmits() {
     function genEmitsFromTS() {
@@ -1332,7 +1104,7 @@ export function compileScript(
           node.exportKind === 'type') ||
         (node.type === 'VariableDeclaration' && node.declare)
       ) {
-        recordType(node, declaredTypes)
+        recordType(node, ctx.declaredTypes)
         if (node.type !== 'TSEnumDeclaration') {
           hoistNode(node)
         }
@@ -1372,9 +1144,9 @@ export function compileScript(
   }
 
   // 4. extract runtime props/emits code from setup context type
-  if (ctx.propsTypeDecl) {
-    extractRuntimeProps(ctx.propsTypeDecl, typeDeclaredProps, declaredTypes)
-  }
+
+  extractRuntimeProps(ctx)
+
   if (emitsTypeDecl) {
     extractRuntimeEmits(emitsTypeDecl, typeDeclaredEmits, error)
   }
@@ -1640,7 +1412,7 @@ export function compileScript(
     runtimeOptions += `\n  __ssrInlineRender: true,`
   }
 
-  const propsDecl = genRuntimeProps()
+  const propsDecl = genRuntimeProps(ctx)
   if (propsDecl) runtimeOptions += `\n  props: ${propsDecl},`
 
   const emitsDecl = genRuntimeEmits()
@@ -1900,13 +1672,6 @@ function walkPattern(
   }
 }
 
-interface PropTypeData {
-  key: string
-  type: string[]
-  required: boolean
-  skipCheck: boolean
-}
-
 function recordType(node: Node, declaredTypes: Record<string, string[]>) {
   if (node.type === 'TSInterfaceDeclaration') {
     declaredTypes[node.id.name] = [`Object`]
@@ -1920,199 +1685,6 @@ function recordType(node: Node, declaredTypes: Record<string, string[]>) {
   } else if (node.type === 'TSEnumDeclaration') {
     declaredTypes[node.id.name] = inferEnumType(node)
   }
-}
-
-function extractRuntimeProps(
-  node: TSTypeLiteral | TSInterfaceBody,
-  props: Record<string, PropTypeData>,
-  declaredTypes: Record<string, string[]>
-) {
-  const members = node.type === 'TSTypeLiteral' ? node.members : node.body
-  for (const m of members) {
-    if (
-      (m.type === 'TSPropertySignature' || m.type === 'TSMethodSignature') &&
-      m.key.type === 'Identifier'
-    ) {
-      let type: string[] | undefined
-      let skipCheck = false
-      if (m.type === 'TSMethodSignature') {
-        type = ['Function']
-      } else if (m.typeAnnotation) {
-        type = inferRuntimeType(m.typeAnnotation.typeAnnotation, declaredTypes)
-        // skip check for result containing unknown types
-        if (type.includes(UNKNOWN_TYPE)) {
-          if (type.includes('Boolean') || type.includes('Function')) {
-            type = type.filter(t => t !== UNKNOWN_TYPE)
-            skipCheck = true
-          } else {
-            type = ['null']
-          }
-        }
-      }
-      props[m.key.name] = {
-        key: m.key.name,
-        required: !m.optional,
-        type: type || [`null`],
-        skipCheck
-      }
-    }
-  }
-}
-
-const UNKNOWN_TYPE = 'Unknown'
-
-function inferRuntimeType(
-  node: TSType,
-  declaredTypes: Record<string, string[]>
-): string[] {
-  switch (node.type) {
-    case 'TSStringKeyword':
-      return ['String']
-    case 'TSNumberKeyword':
-      return ['Number']
-    case 'TSBooleanKeyword':
-      return ['Boolean']
-    case 'TSObjectKeyword':
-      return ['Object']
-    case 'TSNullKeyword':
-      return ['null']
-    case 'TSTypeLiteral': {
-      // TODO (nice to have) generate runtime property validation
-      const types = new Set<string>()
-      for (const m of node.members) {
-        if (
-          m.type === 'TSCallSignatureDeclaration' ||
-          m.type === 'TSConstructSignatureDeclaration'
-        ) {
-          types.add('Function')
-        } else {
-          types.add('Object')
-        }
-      }
-      return types.size ? Array.from(types) : ['Object']
-    }
-    case 'TSFunctionType':
-      return ['Function']
-    case 'TSArrayType':
-    case 'TSTupleType':
-      // TODO (nice to have) generate runtime element type/length checks
-      return ['Array']
-
-    case 'TSLiteralType':
-      switch (node.literal.type) {
-        case 'StringLiteral':
-          return ['String']
-        case 'BooleanLiteral':
-          return ['Boolean']
-        case 'NumericLiteral':
-        case 'BigIntLiteral':
-          return ['Number']
-        default:
-          return [UNKNOWN_TYPE]
-      }
-
-    case 'TSTypeReference':
-      if (node.typeName.type === 'Identifier') {
-        if (declaredTypes[node.typeName.name]) {
-          return declaredTypes[node.typeName.name]
-        }
-        switch (node.typeName.name) {
-          case 'Array':
-          case 'Function':
-          case 'Object':
-          case 'Set':
-          case 'Map':
-          case 'WeakSet':
-          case 'WeakMap':
-          case 'Date':
-          case 'Promise':
-            return [node.typeName.name]
-
-          // TS built-in utility types
-          // https://www.typescriptlang.org/docs/handbook/utility-types.html
-          case 'Partial':
-          case 'Required':
-          case 'Readonly':
-          case 'Record':
-          case 'Pick':
-          case 'Omit':
-          case 'InstanceType':
-            return ['Object']
-
-          case 'Uppercase':
-          case 'Lowercase':
-          case 'Capitalize':
-          case 'Uncapitalize':
-            return ['String']
-
-          case 'Parameters':
-          case 'ConstructorParameters':
-            return ['Array']
-
-          case 'NonNullable':
-            if (node.typeParameters && node.typeParameters.params[0]) {
-              return inferRuntimeType(
-                node.typeParameters.params[0],
-                declaredTypes
-              ).filter(t => t !== 'null')
-            }
-            break
-          case 'Extract':
-            if (node.typeParameters && node.typeParameters.params[1]) {
-              return inferRuntimeType(
-                node.typeParameters.params[1],
-                declaredTypes
-              )
-            }
-            break
-          case 'Exclude':
-          case 'OmitThisParameter':
-            if (node.typeParameters && node.typeParameters.params[0]) {
-              return inferRuntimeType(
-                node.typeParameters.params[0],
-                declaredTypes
-              )
-            }
-            break
-        }
-      }
-      // cannot infer, fallback to UNKNOWN: ThisParameterType
-      return [UNKNOWN_TYPE]
-
-    case 'TSParenthesizedType':
-      return inferRuntimeType(node.typeAnnotation, declaredTypes)
-
-    case 'TSUnionType':
-      return flattenTypes(node.types, declaredTypes)
-    case 'TSIntersectionType': {
-      return flattenTypes(node.types, declaredTypes).filter(
-        t => t !== UNKNOWN_TYPE
-      )
-    }
-
-    case 'TSSymbolKeyword':
-      return ['Symbol']
-
-    default:
-      return [UNKNOWN_TYPE] // no runtime check
-  }
-}
-
-function flattenTypes(
-  types: TSType[],
-  declaredTypes: Record<string, string[]>
-): string[] {
-  return [
-    ...new Set(
-      ([] as string[]).concat(
-        ...types.map(t => inferRuntimeType(t, declaredTypes))
-      )
-    )
-  ]
-}
-
-function toRuntimeTypeString(types: string[]) {
-  return types.length > 1 ? `[${types.join(', ')}]` : types[0]
 }
 
 function inferEnumType(node: TSEnumDeclaration): string[] {
@@ -2130,27 +1702,6 @@ function inferEnumType(node: TSEnumDeclaration): string[] {
     }
   }
   return types.size ? [...types] : ['Number']
-}
-
-// non-comprehensive, best-effort type infernece for a runtime value
-// this is used to catch default value / type declaration mismatches
-// when using props destructure.
-function inferValueType(node: Node): string | undefined {
-  switch (node.type) {
-    case 'StringLiteral':
-      return 'String'
-    case 'NumericLiteral':
-      return 'Number'
-    case 'BooleanLiteral':
-      return 'Boolean'
-    case 'ObjectExpression':
-      return 'Object'
-    case 'ArrayExpression':
-      return 'Array'
-    case 'FunctionExpression':
-    case 'ArrowFunctionExpression':
-      return 'Function'
-  }
 }
 
 function extractRuntimeEmits(

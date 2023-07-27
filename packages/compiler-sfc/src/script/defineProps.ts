@@ -42,7 +42,11 @@ export type PropsDestructureBindings = Record<
     default?: Expression
   }
 >
-
+/**
+ * 用来解析defineProps(arguments)/ defineProps<TypeParameter>()
+ * node可以是arguments和TypeParameter
+ * declI const { } = defineProps<{ }>() { }这部分
+ */
 export function processDefineProps(
   ctx: ScriptCompileContext,
   node: Node,
@@ -91,7 +95,7 @@ export function processDefineProps(
       for (const prop of declId.properties) {
         if (prop.type === 'ObjectProperty') {
           const propKey = resolveObjectKey(prop.key, prop.computed)
-
+          // console.log('propkey', propKey)
           if (!propKey) {
             ctx.error(
               `${DEFINE_PROPS}() destructure cannot use computed key.`,
@@ -175,6 +179,7 @@ export function processWithDefaults(
 export function extractRuntimeProps(ctx: ScriptCompileContext) {
   const node = ctx.propsTypeDecl
   if (!node) return
+  // console.log('extractRuntimeProps',node)
   const members = node.type === 'TSTypeLiteral' ? node.members : node.body
   for (const member of members) {
     if (
@@ -185,8 +190,10 @@ export function extractRuntimeProps(ctx: ScriptCompileContext) {
       let type: string[] | undefined
       let skipCheck = false
       if (member.type === 'TSMethodSignature') {
+        console.log('TSMethodSignature', member.key.name)
         type = ['Function']
       } else if (member.typeAnnotation) {
+        console.log('typeAnntation', member.key.name)
         type = inferRuntimeType(
           member.typeAnnotation.typeAnnotation,
           ctx.declaredTypes
@@ -209,6 +216,8 @@ export function extractRuntimeProps(ctx: ScriptCompileContext) {
       }
     }
   }
+
+  console.log('typeDeclar', ctx.typeDeclaredProps)
 }
 
 export function genRuntimeProps(ctx: ScriptCompileContext): string | undefined {
@@ -290,6 +299,9 @@ function genDestructuredDefaultValue(
   }
 }
 
+// non-comprehensive, best-effort type infernece for a runtime value
+// this is used to catch default value / type declaration mismatches
+// when using props destructure.
 function inferValueType(node: Node): string | undefined {
   switch (node.type) {
     case 'StringLiteral':
@@ -378,7 +390,7 @@ function genPropsFromTS(ctx: ScriptCompileContext) {
       ctx.propsRuntimeDefaults
     )})`
   }
-
+  console.log('genPropsFromTs', propsDecls)
   return propsDecls
 }
 
