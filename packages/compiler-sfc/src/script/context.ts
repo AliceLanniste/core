@@ -3,13 +3,9 @@ import { SFCDescriptor } from '../parse'
 import { SFCScriptCompileOptions } from '../compileScript'
 import { parse as babelParse, ParserOptions, ParserPlugin } from '@babel/parser'
 import { generateCodeFrame } from '@vue/shared'
-import {
-  PropsDeclType,
-  PropsDestructureBindings,
-  PropTypeData
-} from './defineProps'
+import { PropsDeclType, PropsDestructureBindings } from './defineProps'
 import { ModelDecl } from './defineModel'
-
+import { BindingMetadata } from '../../../compiler-core/src'
 export class ScriptCompileContext {
   isJS: boolean
   isTS: boolean
@@ -44,9 +40,11 @@ export class ScriptCompileContext {
   propsDestructureRestId: string | undefined
   propsRuntimeDefaults: Node | undefined
   propsDestructuredBindings: PropsDestructureBindings = Object.create(null)
-  typeDeclaredProps: Record<string, PropTypeData> = {}
   // defineModel
   modelDecls: Record<string, ModelDecl> = {}
+
+  // codegen
+  bindingMetadata: BindingMetadata = {}
   constructor(
     public descriptor: SFCDescriptor,
     public options: SFCScriptCompileOptions

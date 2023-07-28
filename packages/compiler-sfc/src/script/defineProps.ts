@@ -10,7 +10,7 @@ import {
   ObjectMethod
 } from '@babel/types'
 import { ScriptCompileContext } from './context'
-import { isFunctionType } from '@vue/compiler-dom'
+import { BindingTypes, isFunctionType } from '@vue/compiler-dom'
 import { isCallOf, unwrapTSNode } from './utils'
 import { inferRuntimeType, resolveQualifiedType } from './resolveType'
 import {
@@ -21,7 +21,7 @@ import {
   concatStrings,
   toRunTimeTypeString
 } from './utils'
-import { genModels } from './defineModel'
+import { genModelProps } from './defineModel'
 
 export const DEFINE_PROPS = 'defineProps'
 export const WITH_DEFAULTS = 'withDefaults'
@@ -176,50 +176,6 @@ export function processWithDefaults(
   return true
 }
 
-export function extractRuntimeProps(ctx: ScriptCompileContext) {
-  const node = ctx.propsTypeDecl
-  if (!node) return
-  // console.log('extractRuntimeProps',node)
-  const members = node.type === 'TSTypeLiteral' ? node.members : node.body
-  for (const member of members) {
-    if (
-      (member.type === 'TSPropertySignature' ||
-        member.type === 'TSMethodSignature') &&
-      member.key.type === 'Identifier'
-    ) {
-      let type: string[] | undefined
-      let skipCheck = false
-      if (member.type === 'TSMethodSignature') {
-        console.log('TSMethodSignature', member.key.name)
-        type = ['Function']
-      } else if (member.typeAnnotation) {
-        console.log('typeAnntation', member.key.name)
-        type = inferRuntimeType(
-          member.typeAnnotation.typeAnnotation,
-          ctx.declaredTypes
-        )
-        //skip check for result containing unknowm types
-        if (type?.includes(UNKNOWN_TYPE)) {
-          if (type.includes('Boolean') || type.includes('Function')) {
-            type = type.filter(t => t !== UNKNOWN_TYPE)
-            skipCheck = true
-          } else {
-            type = ['null']
-          }
-        }
-      }
-      ctx.typeDeclaredProps[member.key.name] = {
-        key: member.key.name,
-        required: !member.optional,
-        type: type || [`null`],
-        skipCheck
-      }
-    }
-  }
-
-  console.log('typeDeclar', ctx.typeDeclaredProps)
-}
-
 export function genRuntimeProps(ctx: ScriptCompileContext): string | undefined {
   let propsDecls: undefined | string
   if (ctx.propsRuntimeDecl) {
@@ -242,9 +198,9 @@ export function genRuntimeProps(ctx: ScriptCompileContext): string | undefined {
       }
     }
   } else if (ctx.propsTypeDecl) {
-    propsDecls = genPropsFromTS(ctx)
+    propsDecls = genRuntimePropsFromTypes(ctx)
   }
-  const modelsDecls = genModels(ctx)
+  const modelsDecls = genModelProps(ctx)
 
   if (propsDecls && modelsDecls) {
     return `${ctx.helper('mergeModels')}(${propsDecls},${modelsDecls})`
@@ -320,82 +276,80 @@ function inferValueType(node: Node): string | undefined {
   }
 }
 
-function genPropsFromTS(ctx: ScriptCompileContext) {
-  const keys = Object.keys(ctx.typeDeclaredProps)
-  if (!keys.length) return
+/**
+ * definePorps<TypeParameter>()中
+ * @param TypeParameter：TSTypeLiteral | TSInterfaceBody 类型就这两种
+ * @type TSTypeLiteral：<{ number: number}>
+ * @type TSTypeReference:
+ *  ```
+ *    interface Test {}
+      defineProps<Test>()
+ *  ``` 
+ *  其中<Test> 是TSTypeParameterInstantiation类型，里面的Test是TSTypeReference
+ */
+function genRuntimePropsFromTypes(ctx: ScriptCompileContext) {
+  const propStrings: string[] = []
 
   const hasStaticDefaults = hasStaticWithDefaults(ctx)
+
+  const node = ctx.propsTypeDecl!
+  const memebers = node.type === 'TSTypeLiteral' ? node.members : node.body
+  for (const m of memebers) {
+    if (
+      (m.type === 'TSPropertySignature' || m.type === 'TSMethodSignature') &&
+      m.key.type === 'Identifier'
+    ) {
+      const key = m.key.name
+      let type: string[] | undefined
+      let skipCheck = false
+      if (m.type === 'TSMethodSignature') {
+        type = ['Function']
+      } else if (m.typeAnnotation) {
+        type = inferRuntimeType(
+          m.typeAnnotation.typeAnnotation,
+          ctx.declaredTypes
+        )
+
+        if (type.includes(UNKNOWN_TYPE)) {
+          if (type.includes('Boolean') || type.includes('Function')) {
+            type = type.filter(t => t !== UNKNOWN_TYPE)
+            skipCheck = true
+          } else {
+            type = ['null']
+          }
+        }
+      }
+      propStrings.push(
+        genRuntimePropFromType(
+          ctx,
+          key,
+          !m.optional,
+          type || ['null'],
+          skipCheck,
+          hasStaticDefaults
+        )
+      )
+
+      //register bindings
+      ctx.bindingMetadata[key] = BindingTypes.PROPS
+    }
+  }
+  if (!propStrings.length) {
+    return
+  }
   let propsDecls = `{
-            ${keys
-              .map(key => {
-                let defaultString: string | undefined
-                const destructured = genDestructuredDefaultValue(
-                  ctx,
-                  key,
-                  ctx.typeDeclaredProps[key].type
-                )
-                if (destructured) {
-                  defaultString = `default: ${destructured.valueString}${
-                    destructured.needSkipFactory ? `, skipFactory: true` : ``
-                  }`
-                } else if (hasStaticDefaults) {
-                  const prop = (
-                    ctx.propsRuntimeDefaults as ObjectExpression
-                  ).properties.find(node => {
-                    if (node.type === 'SpreadElement') return false
-                    return resolveObjectKey(node.key, node.computed) === key
-                  }) as ObjectProperty | ObjectMethod
-                  if (prop) {
-                    if (prop.type === 'ObjectProperty') {
-                      // prop has corresponding static default value
-                      defaultString = `default: ${ctx.getString(prop.value)}`
-                    } else {
-                      defaultString = `${prop.async ? 'async ' : ''}${
-                        prop.kind !== 'method' ? `${prop.key} ` : ''
-                      }default() ${ctx.getString(prop.body)}`
-                    }
-                  }
-                }
-                const { type, required, skipCheck } = ctx.typeDeclaredProps[key]
-                if (!ctx.options.isProd) {
-                  return `${key}: { ${concatStrings([
-                    `type: ${toRunTimeTypeString(type)}`,
-                    `required: ${required}`,
-                    skipCheck && 'skipCheck: true',
-                    defaultString
-                  ])}}`
-                } else if (
-                  type.some(
-                    el =>
-                      el === 'Boolean' ||
-                      ((!hasStaticDefaults || defaultString) &&
-                        el === 'Function')
-                  )
-                ) {
-                  return `${key}: { ${concatStrings([
-                    `type: ${toRunTimeTypeString(type)}`,
-                    defaultString
-                  ])}}`
-                } else {
-                  //
-                  return `${key}: ${
-                    defaultString ? `{ ${defaultString} }` : `{}`
-                  }`
-                }
-              })
-              .join(',\n ')}\n }`
+    ${propStrings.join(',\n    ')}\n  }`
 
   if (ctx.propsRuntimeDefaults && !hasStaticDefaults) {
     propsDecls = `${ctx.helper('mergeDefaults')}(${propsDecls}, ${ctx.getString(
       ctx.propsRuntimeDefaults
     )})`
   }
-  console.log('genPropsFromTs', propsDecls)
   return propsDecls
 }
 
 function hasStaticWithDefaults(ctx: ScriptCompileContext) {
-  return (
+  return !!(
     ctx.propsRuntimeDefaults &&
     ctx.propsRuntimeDefaults.type === 'ObjectExpression' &&
     ctx.propsRuntimeDefaults.properties.every(
@@ -406,6 +360,60 @@ function hasStaticWithDefaults(ctx: ScriptCompileContext) {
   )
 }
 
-// function toRuntimeTypeString(type: string[]) {
-// throw new Error('Function not implemented.')
-// }
+function genRuntimePropFromType(
+  ctx: ScriptCompileContext,
+  key: string,
+  required: boolean,
+  type: string[],
+  skipCheck: boolean,
+  hasStaticDefaults: boolean
+): string {
+  let defaultString: string | undefined
+  const destructured = genDestructuredDefaultValue(ctx, key, type)
+
+  if (destructured) {
+    defaultString = `default: ${destructured.valueString}${
+      destructured.needSkipFactory ? `, skipFactory: true` : ``
+    }`
+  } else if (hasStaticDefaults) {
+    const prop = (ctx.propsRuntimeDefaults as ObjectExpression).properties.find(
+      node => {
+        if (node.type === 'SpreadElement') return false
+        return resolveObjectKey(node.key, node.computed) === key
+      }
+    ) as ObjectProperty | ObjectMethod
+    if (prop) {
+      if (prop.type === 'ObjectProperty') {
+        // prop has corresponding static default value
+        defaultString = `default: ${ctx.getString(prop.value)}`
+      } else {
+        defaultString = `${prop.async ? 'async ' : ''}${
+          prop.kind !== 'method' ? `${prop.key} ` : ''
+        }default() ${ctx.getString(prop.body)}`
+      }
+    }
+  }
+
+  if (!ctx.options.isProd) {
+    return `${key}: { ${concatStrings([
+      `type: ${toRunTimeTypeString(type)}`,
+      `required: ${required}`,
+      skipCheck && 'skipCheck: true',
+      defaultString
+    ])} }`
+  } else if (
+    type.some(
+      el =>
+        el === 'Boolean' ||
+        ((!hasStaticDefaults || defaultString) && el === 'Function')
+    )
+  ) {
+    return `${key}: { ${concatStrings([
+      `type: ${toRunTimeTypeString(type)}`,
+      defaultString
+    ])} }`
+  } else {
+    // production: checks are useless
+    return `${key}: ${defaultString ? `{ ${defaultString} }` : `{}`}`
+  }
+}

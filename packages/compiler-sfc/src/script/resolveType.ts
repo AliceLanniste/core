@@ -119,6 +119,9 @@ function filterExtendsType(extendsTypes: Node[], bodies: TSTypeElement[]) {
   })
 }
 
+/**
+ * 这个函数作用是让definProps<TypeParameter>(),将@param TypeParameter转换成js的type
+ */
 export function inferRuntimeType(
   node: TSType,
   declaredTypes: Record<string, string[]>

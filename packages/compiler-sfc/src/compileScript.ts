@@ -56,9 +56,7 @@ import {
   processWithDefaults,
   DEFINE_PROPS,
   WITH_DEFAULTS,
-  extractRuntimeProps,
-  genRuntimeProps,
-  PropTypeData
+  genRuntimeProps
 } from './script/defineProps'
 import {
   FromNormalScript,
@@ -283,7 +281,7 @@ export function compileScript(
   }
 
   // metadata that needs to be returned
-  const bindingMetadata: BindingMetadata = {}
+  // const ctx.bindingMetadata: ctx.bindingMetadata = {}
   const helperImports: Set<string> = new Set()
   const userImports: Record<string, ImportBinding> = Object.create(null)
   const scriptBindings: Record<string, BindingTypes> = Object.create(null)
@@ -298,7 +296,7 @@ export function compileScript(
   let hasAwait = false
   let hasInlinedSsrRenderFn = false
   // props/emits declared via types
-  const typeDeclaredProps: Record<string, PropTypeData> = {}
+  // const typeDeclaredProps: Record<string, PropTypeData> = {}
   const typeDeclaredEmits: Set<string> = new Set()
   // record declared types for runtime props type generation
   // const declaredTypes: Record<string, string[]> = {}
@@ -1145,7 +1143,7 @@ export function compileScript(
 
   // 4. extract runtime props/emits code from setup context type
 
-  extractRuntimeProps(ctx)
+  // extractRuntimeProps(ctx)
 
   if (emitsTypeDecl) {
     extractRuntimeEmits(emitsTypeDecl, typeDeclaredEmits, error)
@@ -1180,31 +1178,29 @@ export function compileScript(
 
   // 7. analyze binding metadata
   if (scriptAst) {
-    Object.assign(bindingMetadata, analyzeScriptBindings(scriptAst.body))
+    Object.assign(ctx.bindingMetadata, analyzeScriptBindings(scriptAst.body))
   }
   if (ctx.propsRuntimeDecl) {
     for (const key of getObjectOrArrayExpressionKeys(ctx.propsRuntimeDecl)) {
-      bindingMetadata[key] = BindingTypes.PROPS
+      ctx.bindingMetadata[key] = BindingTypes.PROPS
     }
   }
-  for (const key in typeDeclaredProps) {
-    bindingMetadata[key] = BindingTypes.PROPS
-  }
+
   for (const key in modelDecls) {
-    bindingMetadata[key] = BindingTypes.PROPS
+    ctx.bindingMetadata[key] = BindingTypes.PROPS
   }
   // props aliases
   if (ctx.propsDestructureDecl) {
     if (ctx.propsDestructureRestId) {
-      bindingMetadata[ctx.propsDestructureRestId] =
+      ctx.bindingMetadata[ctx.propsDestructureRestId] =
         BindingTypes.SETUP_REACTIVE_CONST
     }
     for (const key in propsDestructuredBindings) {
       const { local } = propsDestructuredBindings[key]
       if (local !== key) {
-        bindingMetadata[local] = BindingTypes.PROPS_ALIASED
-        ;(bindingMetadata.__propsAliases ||
-          (bindingMetadata.__propsAliases = {}))[local] = key
+        ctx.bindingMetadata[local] = BindingTypes.PROPS_ALIASED
+        ;(ctx.bindingMetadata.__propsAliases ||
+          (ctx.bindingMetadata.__propsAliases = {}))[local] = key
       }
     }
   }
@@ -1212,7 +1208,7 @@ export function compileScript(
     userImports
   )) {
     if (isType) continue
-    bindingMetadata[key] =
+    ctx.bindingMetadata[key] =
       imported === '*' ||
       (imported === 'default' && source.endsWith('.vue')) ||
       source === 'vue'
@@ -1220,15 +1216,15 @@ export function compileScript(
         : BindingTypes.SETUP_MAYBE_REF
   }
   for (const key in scriptBindings) {
-    bindingMetadata[key] = scriptBindings[key]
+    ctx.bindingMetadata[key] = scriptBindings[key]
   }
   for (const key in setupBindings) {
-    bindingMetadata[key] = setupBindings[key]
+    ctx.bindingMetadata[key] = setupBindings[key]
   }
   // known ref bindings
   if (refBindings) {
     for (const key of refBindings) {
-      bindingMetadata[key] = BindingTypes.SETUP_REF
+      ctx.bindingMetadata[key] = BindingTypes.SETUP_REF
     }
   }
 
@@ -1242,7 +1238,7 @@ export function compileScript(
     helperImports.add('unref')
     s.prependLeft(
       startOffset,
-      `\n${genCssVarsCode(cssVars, bindingMetadata, scopeId, isProd)}\n`
+      `\n${genCssVarsCode(cssVars, ctx.bindingMetadata, scopeId, isProd)}\n`
     )
   }
 
@@ -1314,7 +1310,7 @@ export function compileScript(
         // generate getter for import bindings
         // skip vue imports since we know they will never change
         returned += `get ${key}() { return ${key} }, `
-      } else if (bindingMetadata[key] === BindingTypes.SETUP_LET) {
+      } else if (ctx.bindingMetadata[key] === BindingTypes.SETUP_LET) {
         // local let binding, also add setter
         const setArg = key === 'v' ? `_v` : `v`
         returned +=
@@ -1347,7 +1343,7 @@ export function compileScript(
             options.templateOptions.compilerOptions),
           inline: true,
           isTS,
-          bindingMetadata
+          bindingMetadata: ctx.bindingMetadata
         }
       })
       if (tips.length) {
@@ -1483,7 +1479,7 @@ export function compileScript(
 
   return {
     ...scriptSetup,
-    bindings: bindingMetadata,
+    bindings: ctx.bindingMetadata,
     imports: userImports,
     content: s.toString(),
     map: genSourceMap
