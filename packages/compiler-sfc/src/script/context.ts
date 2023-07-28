@@ -6,6 +6,7 @@ import { generateCodeFrame } from '@vue/shared'
 import { PropsDeclType, PropsDestructureBindings } from './defineProps'
 import { ModelDecl } from './defineModel'
 import { BindingMetadata } from '../../../compiler-core/src'
+import { MagicString } from 'packages/vue/compiler-sfc'
 export class ScriptCompileContext {
   isJS: boolean
   isTS: boolean
@@ -16,6 +17,7 @@ export class ScriptCompileContext {
   scriptStartOffset = this.descriptor.script?.loc.start.offset
   scriptEndOffset = this.descriptor.script?.loc.end.offset
 
+  s = new MagicString(this.descriptor.source)
   helperImports: Set<string> = new Set()
   helper(key: string): string {
     this.helperImports.add(key)
