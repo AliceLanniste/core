@@ -14,6 +14,8 @@ export class ScriptCompileContext {
   scriptAST: Program | null
   scriptSetupAST: Program | null
 
+  startOffset = this.descriptor.scriptSetup?.loc.start.offset
+  endOffset = this.descriptor.scriptSetup?.loc.end.offset
   scriptStartOffset = this.descriptor.script?.loc.start.offset
   scriptEndOffset = this.descriptor.script?.loc.end.offset
 
