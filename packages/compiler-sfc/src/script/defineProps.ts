@@ -275,8 +275,15 @@ function inferValueType(node: Node): string | undefined {
       return 'Function'
   }
 }
+// TODO:
+// ctx.bindingMetadata，是用来达到下面这样，这样有什么用
+/* Analyzed bindings: {
+  "str": "props",
+  "num": "props"
+} */
 
 /**
+ * 
  * definePorps<TypeParameter>()中
  * @param TypeParameter：TSTypeLiteral | TSInterfaceBody 类型就这两种
  * @type TSTypeLiteral：<{ number: number}>
