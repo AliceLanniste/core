@@ -23,7 +23,6 @@ import {
   ArrayPattern,
   Identifier,
   ExportSpecifier,
-  TSType,
   TSTypeLiteral,
   TSFunctionType,
   ArrayExpression,
@@ -31,8 +30,6 @@ import {
   CallExpression,
   RestElement,
   TSInterfaceBody,
-  AwaitExpression,
-  LVal,
   TSEnumDeclaration
 } from '@babel/types'
 import { walk } from 'estree-walker'
@@ -57,20 +54,23 @@ import {
   genRuntimeProps,
   PropsDestructureBindings
 } from './script/defineProps'
-import { processDefineModel, DEFINE_MODEL } from './script/defineModel'
 import {
-  FromNormalScript,
-  isCallOf,
-  resolveObjectKey,
-  unwrapTSNode
-} from './script/utils'
-import { inferRuntimeType, resolveQualifiedType } from './script/resolveType'
-
-// Special compiler macros
-const DEFINE_EMITS = 'defineEmits'
-const DEFINE_EXPOSE = 'defineExpose'
-const DEFINE_OPTIONS = 'defineOptions'
-const DEFINE_SLOTS = 'defineSlots'
+  processDefineModel,
+  DEFINE_MODEL,
+  ModelDecl
+} from './script/defineModel'
+import { isCallOf, resolveObjectKey, unwrapTSNode } from './script/utils'
+import { inferRuntimeType } from './script/resolveType'
+import { processDefineSlots } from './script/defineSlots'
+import {
+  DEFINE_EMITS,
+  EmitsDeclType,
+  genRuntimeEmits,
+  processDefineEmits
+} from './script/defineEmits'
+import { DEFINE_EXPOSE, processDefineExpose } from './script/defineExpose'
+import { DEFINE_OPTIONS, processDefineOptions } from './script/defineOptions'
+import { processAwait } from './script/topLevelAwait'
 
 const isBuiltInDir = makeMap(
   `once,memo,if,for,else,else-if,slot,text,html,on,bind,model,show,cloak,is`
@@ -141,15 +141,6 @@ export interface ImportBinding {
   source: string
   isFromSetup: boolean
   isUsedInTemplate: boolean
-}
-
-type EmitsDeclType = FromNormalScript<
-  TSFunctionType | TSTypeLiteral | TSInterfaceBody
->
-interface ModelDecl {
-  type: TSType | undefined
-  options: string | undefined
-  identifier: string | undefined
 }
 
 /**
@@ -367,219 +358,6 @@ export function compileScript(
     }
   }
 
-  function processDefineEmits(node: Node, declId?: LVal): boolean {
-    if (!isCallOf(node, DEFINE_EMITS)) {
-      return false
-    }
-    if (ctx.hasDefineEmitCall) {
-      error(`duplicate ${DEFINE_EMITS}() call`, node)
-    }
-    ctx.hasDefineEmitCall = true
-    emitsRuntimeDecl = node.arguments[0]
-    if (node.typeParameters) {
-      if (emitsRuntimeDecl) {
-        error(
-          `${DEFINE_EMITS}() cannot accept both type and non-type arguments ` +
-            `at the same time. Use one or the other.`,
-          node
-        )
-      }
-
-      const emitsTypeDeclRaw = node.typeParameters.params[0]
-      emitsTypeDecl = resolveQualifiedType(
-        ctx,
-        emitsTypeDeclRaw,
-        node => node.type === 'TSFunctionType' || node.type === 'TSTypeLiteral'
-      ) as EmitsDeclType | undefined
-
-      if (!emitsTypeDecl) {
-        error(
-          `type argument passed to ${DEFINE_EMITS}() must be a function type, ` +
-            `a literal type with call signatures, or a reference to the above types.`,
-          emitsTypeDeclRaw
-        )
-      }
-    }
-
-    if (declId) {
-      emitIdentifier =
-        declId.type === 'Identifier'
-          ? declId.name
-          : scriptSetup!.content.slice(declId.start!, declId.end!)
-    }
-
-    return true
-  }
-
-  function processDefineSlots(node: Node, declId?: LVal): boolean {
-    if (!isCallOf(node, DEFINE_SLOTS)) {
-      return false
-    }
-    if (ctx.hasDefineSlotsCall) {
-      error(`duplicate ${DEFINE_SLOTS}() call`, node)
-    }
-    ctx.hasDefineSlotsCall = true
-
-    if (node.arguments.length > 0) {
-      error(`${DEFINE_SLOTS}() cannot accept arguments`, node)
-    }
-
-    if (declId) {
-      ctx.s.overwrite(
-        startOffset + node.start!,
-        startOffset + node.end!,
-        `${helper('useSlots')}()`
-      )
-    }
-
-    return true
-  }
-
-  // function processDefineModel(node: Node, declId?: LVal): boolean {
-  //   if (!enableDefineModel || !isCallOf(node, DEFINE_MODEL)) {
-  //     return false
-  //   }
-  //   ctx.hasDefineModelCall = true
-
-  //   const type =
-  //     (node.typeParameters && node.typeParameters.params[0]) || undefined
-  //   let modelName: string
-  //   let options: Node | undefined
-  //   const arg0 = node.arguments[0] && unwrapTSNode(node.arguments[0])
-  //   if (arg0 && arg0.type === 'StringLiteral') {
-  //     modelName = arg0.value
-  //     options = node.arguments[1]
-  //   } else {
-  //     modelName = 'modelValue'
-  //     options = arg0
-  //   }
-
-  //   if (modelDecls[modelName]) {
-  //     error(`duplicate model name ${JSON.stringify(modelName)}`, node)
-  //   }
-
-  //   const optionsString = options
-  //     ? s.slice(startOffset + options.start!, startOffset + options.end!)
-  //     : undefined
-
-  //   modelDecls[modelName] = {
-  //     type,
-  //     options: optionsString,
-  //     identifier:
-  //       declId && declId.type === 'Identifier' ? declId.name : undefined
-  //   }
-
-  //   let runtimeOptions = ''
-  //   if (options) {
-  //     if (options.type === 'ObjectExpression') {
-  //       const local = options.properties.find(
-  //         p =>
-  //           p.type === 'ObjectProperty' &&
-  //           ((p.key.type === 'Identifier' && p.key.name === 'local') ||
-  //             (p.key.type === 'StringLiteral' && p.key.value === 'local'))
-  //       ) as ObjectProperty
-
-  //       if (local) {
-  //         runtimeOptions = `{ ${s.slice(
-  //           startOffset + local.start!,
-  //           startOffset + local.end!
-  //         )} }`
-  //       } else {
-  //         for (const p of options.properties) {
-  //           if (p.type === 'SpreadElement' || p.computed) {
-  //             runtimeOptions = optionsString!
-  //             break
-  //           }
-  //         }
-  //       }
-  //     } else {
-  //       runtimeOptions = optionsString!
-  //     }
-  //   }
-
-  //   s.overwrite(
-  //     startOffset + node.start!,
-  //     startOffset + node.end!,
-  //     `${helper('useModel')}(__props, ${JSON.stringify(modelName)}${
-  //       runtimeOptions ? `, ${runtimeOptions}` : ``
-  //     })`
-  //   )
-
-  //   return true
-  // }
-
-  function processDefineOptions(node: Node): boolean {
-    if (!isCallOf(node, DEFINE_OPTIONS)) {
-      return false
-    }
-    if (ctx.hasDefineOptionsCall) {
-      error(`duplicate ${DEFINE_OPTIONS}() call`, node)
-    }
-    if (node.typeParameters) {
-      error(`${DEFINE_OPTIONS}() cannot accept type arguments`, node)
-    }
-    if (!node.arguments[0]) return true
-
-    ctx.hasDefineOptionsCall = true
-    optionsRuntimeDecl = unwrapTSNode(node.arguments[0])
-
-    let propsOption = undefined
-    let emitsOption = undefined
-    let exposeOption = undefined
-    let slotsOption = undefined
-    if (optionsRuntimeDecl.type === 'ObjectExpression') {
-      for (const prop of optionsRuntimeDecl.properties) {
-        if (
-          (prop.type === 'ObjectProperty' || prop.type === 'ObjectMethod') &&
-          prop.key.type === 'Identifier'
-        ) {
-          if (prop.key.name === 'props') propsOption = prop
-          if (prop.key.name === 'emits') emitsOption = prop
-          if (prop.key.name === 'expose') exposeOption = prop
-          if (prop.key.name === 'slots') slotsOption = prop
-        }
-      }
-    }
-
-    if (propsOption) {
-      error(
-        `${DEFINE_OPTIONS}() cannot be used to declare props. Use ${DEFINE_PROPS}() instead.`,
-        propsOption
-      )
-    }
-    if (emitsOption) {
-      error(
-        `${DEFINE_OPTIONS}() cannot be used to declare emits. Use ${DEFINE_EMITS}() instead.`,
-        emitsOption
-      )
-    }
-    if (exposeOption) {
-      error(
-        `${DEFINE_OPTIONS}() cannot be used to declare expose. Use ${DEFINE_EXPOSE}() instead.`,
-        exposeOption
-      )
-    }
-    if (slotsOption) {
-      error(
-        `${DEFINE_OPTIONS}() cannot be used to declare slots. Use ${DEFINE_SLOTS}() instead.`,
-        slotsOption
-      )
-    }
-
-    return true
-  }
-
-  function processDefineExpose(node: Node): boolean {
-    if (isCallOf(node, DEFINE_EXPOSE)) {
-      if (ctx.hasDefineExposeCall) {
-        error(`duplicate ${DEFINE_EXPOSE}() call`, node)
-      }
-      ctx.hasDefineExposeCall = true
-      return true
-    }
-    return false
-  }
-
   function checkInvalidScopeReference(node: Node | undefined, method: string) {
     if (!node) return
     walkIdentifiers(node, id => {
@@ -595,90 +373,6 @@ export function compileScript(
         )
       }
     })
-  }
-
-  /**
-   * await foo()
-   * -->
-   * ;(
-   *   ([__temp,__restore] = withAsyncContext(() => foo())),
-   *   await __temp,
-   *   __restore()
-   * )
-   *
-   * const a = await foo()
-   * -->
-   * const a = (
-   *   ([__temp, __restore] = withAsyncContext(() => foo())),
-   *   __temp = await __temp,
-   *   __restore(),
-   *   __temp
-   * )
-   */
-  function processAwait(
-    node: AwaitExpression,
-    needSemi: boolean,
-    isStatement: boolean
-  ) {
-    const argumentStart =
-      node.argument.extra && node.argument.extra.parenthesized
-        ? (node.argument.extra.parenStart as number)
-        : node.argument.start!
-
-    const argumentStr = source.slice(
-      argumentStart + startOffset,
-      node.argument.end! + startOffset
-    )
-
-    const containsNestedAwait = /\bawait\b/.test(argumentStr)
-
-    ctx.s.overwrite(
-      node.start! + startOffset,
-      argumentStart + startOffset,
-      `${needSemi ? `;` : ``}(\n  ([__temp,__restore] = ${helper(
-        `withAsyncContext`
-      )}(${containsNestedAwait ? `async ` : ``}() => `
-    )
-    ctx.s.appendLeft(
-      node.end! + startOffset,
-      `)),\n  ${isStatement ? `` : `__temp = `}await __temp,\n  __restore()${
-        isStatement ? `` : `,\n  __temp`
-      }\n)`
-    )
-  }
-
-  /**
-   * check defaults. If the default object is an object literal with only
-   * static properties, we can directly generate more optimized default
-   * declarations. Otherwise we will have to fallback to runtime merging.
-   */
-
-  function genRuntimeEmits() {
-    function genEmitsFromTS() {
-      return typeDeclaredEmits.size
-        ? `[${Array.from(typeDeclaredEmits)
-            .map(k => JSON.stringify(k))
-            .join(', ')}]`
-        : ``
-    }
-
-    let emitsDecl = ''
-    if (emitsRuntimeDecl) {
-      emitsDecl = scriptSetup!.content
-        .slice(emitsRuntimeDecl.start!, emitsRuntimeDecl.end!)
-        .trim()
-    } else if (emitsTypeDecl) {
-      emitsDecl = genEmitsFromTS()
-    }
-    if (ctx.hasDefineModelCall) {
-      let modelEmitsDecl = `[${Object.keys(modelDecls)
-        .map(n => JSON.stringify(`update:${n}`))
-        .join(', ')}]`
-      emitsDecl = emitsDecl
-        ? `${helper('mergeModels')}(${emitsDecl}, ${modelEmitsDecl})`
-        : modelEmitsDecl
-    }
-    return emitsDecl
   }
 
   // 0. parse both <script> and <script setup> blocks
@@ -933,13 +627,13 @@ export function compileScript(
       // process `defineProps` and `defineEmit(s)` calls
       if (
         processDefineProps(ctx, expr) ||
-        processDefineEmits(expr) ||
-        processDefineOptions(expr) ||
+        processDefineEmits(ctx, expr) ||
+        processDefineOptions(ctx, expr) ||
         processWithDefaults(ctx, expr) ||
-        processDefineSlots(expr)
+        processDefineSlots(ctx, expr)
       ) {
         ctx.s.remove(node.start! + startOffset, node.end! + startOffset)
-      } else if (processDefineExpose(expr)) {
+      } else if (processDefineExpose(ctx, expr)) {
         // defineExpose({}) -> expose({})
         const callee = (expr as CallExpression).callee
         ctx.s.overwrite(
@@ -961,7 +655,7 @@ export function compileScript(
         const decl = node.declarations[i]
         const init = decl.init && unwrapTSNode(decl.init)
         if (init) {
-          if (processDefineOptions(init)) {
+          if (processDefineOptions(ctx, init)) {
             error(
               `${DEFINE_OPTIONS}() has no returning value, it cannot be assigned.`,
               node
@@ -973,9 +667,9 @@ export function compileScript(
             processDefineProps(ctx, init, decl.id) ||
             processWithDefaults(ctx, init, decl.id)
           const isDefineEmits =
-            !isDefineProps && processDefineEmits(init, decl.id)
+            !isDefineProps && processDefineEmits(ctx, init, decl.id)
           !isDefineEmits &&
-            (processDefineSlots(init, decl.id) ||
+            (processDefineSlots(ctx, init, decl.id) ||
               processDefineModel(ctx, init, decl.id))
 
           if (isDefineProps || isDefineEmits) {
@@ -1056,6 +750,7 @@ export function compileScript(
               )
             })
             processAwait(
+              ctx,
               child,
               needsSemi,
               parent.type === 'ExpressionStatement'
@@ -1394,7 +1089,7 @@ export function compileScript(
   const propsDecl = genRuntimeProps(ctx)
   if (propsDecl) runtimeOptions += `\n  props: ${propsDecl},`
 
-  const emitsDecl = genRuntimeEmits()
+  const emitsDecl = genRuntimeEmits(ctx)
   if (emitsDecl) runtimeOptions += `\n  emits: ${emitsDecl},`
 
   let definedOptions = ''

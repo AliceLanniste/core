@@ -17,8 +17,6 @@ export class ScriptCompileContext {
 
   startOffset = this.descriptor.scriptSetup?.loc.start.offset
   endOffset = this.descriptor.scriptSetup?.loc.end.offset
-  scriptStartOffset = this.descriptor.script?.loc.start.offset
-  scriptEndOffset = this.descriptor.script?.loc.end.offset
 
   s = new MagicString(this.descriptor.source)
   helperImports: Set<string> = new Set()
@@ -51,6 +49,8 @@ export class ScriptCompileContext {
   emitsRuntimeDecl: Node | undefined
   emitsTypeDecl: EmitsDeclType | undefined
   emitIdentifier: string | undefined
+  // defineOptions
+  optionsRuntimeDecl: Node | undefined
   // codegen
   bindingMetadata: BindingMetadata = {}
   constructor(
@@ -122,7 +122,7 @@ export class ScriptCompileContext {
           plugins,
           sourceType: 'module'
         },
-        this.scriptStartOffset!
+        this.descriptor.script.loc.start.offset
       )
 
     this.scriptSetupAST =
@@ -133,7 +133,7 @@ export class ScriptCompileContext {
           plugins: [...plugins, 'topLevelAwait'],
           sourceType: 'module'
         },
-        this.scriptStartOffset!
+        this.startOffset!
       )
   }
 
@@ -147,14 +147,14 @@ export class ScriptCompileContext {
   error(
     msg: string,
     node: Node,
-    end: number = node.end! + this.scriptStartOffset!
+    end: number = node.end! + this.startOffset!
   ): never {
     throw new Error(`
         [@vue/compiler-sfc]${msg}\n\n${
       this.descriptor.filename
     }\n${generateCodeFrame(
       this.descriptor.source,
-      node.start! + this.scriptStartOffset!,
+      node.start! + this.startOffset!,
       end
     )}
         `)
