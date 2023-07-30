@@ -7,7 +7,7 @@ export function resolveObjectKey(node: Node, computed: boolean) {
   switch (node.type) {
     case 'StringLiteral':
     case 'NumberLiteral':
-      return node.value
+      return String(node.value)
     case 'Identifier':
       if (!computed) return node.name
   }

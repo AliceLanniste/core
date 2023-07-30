@@ -22,6 +22,7 @@ import {
   toRunTimeTypeString
 } from './utils'
 import { genModelProps } from './defineModel'
+import { getObjectOrArrayExpressionKeys } from './analyzeScriptBindings'
 
 export const DEFINE_PROPS = 'defineProps'
 export const WITH_DEFAULTS = 'withDefaults'
@@ -61,6 +62,12 @@ export function processDefineProps(
   }
   ctx.hasDefinePropsCall = true
   ctx.propsRuntimeDecl = node.arguments[0]
+
+  if (ctx.propsRuntimeDecl) {
+    for (const key of getObjectOrArrayExpressionKeys(ctx.propsRuntimeDecl)) {
+      ctx.bindingMetadata[key] = BindingTypes.PROPS
+    }
+  }
 
   // call has type parameters - infer runtime types from it
   if (node.typeParameters) {
