@@ -5,7 +5,6 @@ import {
   Program,
   VariableDeclaration
 } from '@babel/types'
-import MagicString from 'magic-string'
 import { walk } from 'estree-walker'
 import {
   extractIdentifiers,
@@ -17,7 +16,8 @@ import {
 } from '@vue/compiler-core'
 import { isCallOf, unwrapTSNode } from './utils'
 import { genPropsAccessExp } from '@vue/shared'
-import { PropsDestructureBindings } from './defineProps'
+// import { PropsDestructureBindings } from './defineProps'
+import { ScriptCompileContext } from './context'
 
 /**
  * true -> prop binding
@@ -26,11 +26,7 @@ import { PropsDestructureBindings } from './defineProps'
 type Scope = Record<string, boolean>
 
 export function transformDestructuredProps(
-  ast: Program,
-  s: MagicString,
-  offset = 0,
-  knownProps: PropsDestructureBindings,
-  error: (msg: string, node: Node, end?: number) => never,
+  ctx: ScriptCompileContext,
   vueImportAliases: Record<string, string>
 ) {
   const rootScope: Scope = {}
@@ -40,8 +36,8 @@ export function transformDestructuredProps(
   const parentStack: Node[] = []
   const propsLocalToPublicMap: Record<string, string> = Object.create(null)
 
-  for (const key in knownProps) {
-    const { local } = knownProps[key]
+  for (const key in ctx.propsDestructuredBindings) {
+    const { local } = ctx.propsDestructuredBindings[key]
     rootScope[local] = true
     propsLocalToPublicMap[local] = key
   }
@@ -60,7 +56,7 @@ export function transformDestructuredProps(
     if (currentScope) {
       currentScope[id.name] = false
     } else {
-      error(
+      ctx.error(
         'registerBinding called without active scope, something is wrong.',
         id
       )
@@ -121,7 +117,7 @@ export function transformDestructuredProps(
       (parent.type === 'AssignmentExpression' && id === parent.left) ||
       parent.type === 'UpdateExpression'
     ) {
-      error(`Cannot assign to destructured props as they are readonly.`, id)
+      ctx.error(`Cannot assign to destructured props as they are readonly.`, id)
     }
 
     if (isStaticProperty(parent) && parent.shorthand) {
@@ -132,16 +128,16 @@ export function transformDestructuredProps(
         isInDestructureAssignment(parent, parentStack)
       ) {
         // { prop } -> { prop: __props.prop }
-        s.appendLeft(
-          id.end! + offset,
+        ctx.s.appendLeft(
+          id.end! + ctx.startOffset!,
           `: ${genPropsAccessExp(propsLocalToPublicMap[id.name])}`
         )
       }
     } else {
       // x --> __props.x
-      s.overwrite(
-        id.start! + offset,
-        id.end! + offset,
+      ctx.s.overwrite(
+        id.start! + ctx.startOffset!,
+        id.end! + ctx.startOffset!,
         genPropsAccessExp(propsLocalToPublicMap[id.name])
       )
     }
@@ -151,7 +147,7 @@ export function transformDestructuredProps(
     if (isCallOf(node, alias)) {
       const arg = unwrapTSNode(node.arguments[0])
       if (arg.type === 'Identifier' && currentScope[arg.name]) {
-        error(
+        ctx.error(
           `"${arg.name}" is a destructured prop and should not be passed directly to ${method}(). ` +
             `Pass a getter () => ${arg.name} instead.`,
           arg
@@ -161,6 +157,7 @@ export function transformDestructuredProps(
   }
 
   // check root scope first
+  const ast = ctx.scriptSetupAST!
   walkScope(ast, true)
   ;(walk as any)(ast, {
     enter(node: Node, parent?: Node) {
