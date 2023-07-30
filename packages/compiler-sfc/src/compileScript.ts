@@ -33,7 +33,6 @@ import {
   TSInterfaceBody,
   AwaitExpression,
   LVal,
-  Expression,
   TSEnumDeclaration
 } from '@babel/types'
 import { walk } from 'estree-walker'
@@ -55,7 +54,8 @@ import {
   processWithDefaults,
   DEFINE_PROPS,
   WITH_DEFAULTS,
-  genRuntimeProps
+  genRuntimeProps,
+  PropsDestructureBindings
 } from './script/defineProps'
 import { processDefineModel, DEFINE_MODEL } from './script/defineModel'
 import {
@@ -142,14 +142,6 @@ export interface ImportBinding {
   isFromSetup: boolean
   isUsedInTemplate: boolean
 }
-
-export type PropsDestructureBindings = Record<
-  string, // public prop key
-  {
-    local: string // local identifier, may be different
-    default?: Expression
-  }
->
 
 type EmitsDeclType = FromNormalScript<
   TSFunctionType | TSTypeLiteral | TSInterfaceBody

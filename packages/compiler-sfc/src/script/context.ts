@@ -7,6 +7,7 @@ import { PropsDeclType, PropsDestructureBindings } from './defineProps'
 import { ModelDecl } from './defineModel'
 import { BindingMetadata } from '../../../compiler-core/src'
 import { MagicString } from 'packages/vue/compiler-sfc'
+import { EmitsDeclType } from './defineEmits'
 export class ScriptCompileContext {
   isJS: boolean
   isTS: boolean
@@ -46,7 +47,10 @@ export class ScriptCompileContext {
   propsDestructuredBindings: PropsDestructureBindings = Object.create(null)
   // defineModel
   modelDecls: Record<string, ModelDecl> = {}
-
+  // defineEmits
+  emitsRuntimeDecl: Node | undefined
+  emitsTypeDecl: EmitsDeclType | undefined
+  emitIdentifier: string | undefined
   // codegen
   bindingMetadata: BindingMetadata = {}
   constructor(
