@@ -1,9 +1,11 @@
 import { shouldTransform, transformAST } from '@vue/reactivity-transform'
 import { analyzeScriptBindings } from './analyzeScriptBindings'
 import { ScriptCompileContext } from './context'
-import { MagicString, rewriteDefaultAST } from '..'
-import { genNormalScriptCssVarsCode } from '../style/cssVars'
+import MagicString from 'magic-string'
 import { RawSourceMap } from 'source-map-js'
+import { rewriteDefaultAST } from '../rewriteDefault'
+import { genNormalScriptCssVarsCode } from '../style/cssVars'
+
 export const normalScriptDefaultVar = `__default__`
 
 export function processNormalScript(
@@ -12,23 +14,23 @@ export function processNormalScript(
 ) {
   const script = ctx.descriptor.script!
   if (script.lang && !ctx.isJS && !ctx.isTS) {
-    //do not process non js/ts script blocks
+    // do not process non js/ts script blocks
     return script
   }
-
   try {
     let content = script.content
     let map = script.map
-    const scriptAST = ctx.scriptAST!
-    const bindings = analyzeScriptBindings(scriptAST.body)
+    const scriptAst = ctx.scriptAst!
+    const bindings = analyzeScriptBindings(scriptAst.body)
     const { source, filename, cssVars } = ctx.descriptor
     const { sourceMap, genDefaultAs, isProd } = ctx.options
 
+    // TODO remove in 3.4
     if (ctx.options.reactivityTransform && shouldTransform(content)) {
       const s = new MagicString(source)
       const startOffset = script.loc.start.offset
       const endOffset = script.loc.end.offset
-      const { importedHelpers } = transformAST(scriptAST, s, startOffset)
+      const { importedHelpers } = transformAST(scriptAst, s, startOffset)
       if (importedHelpers.length) {
         s.prepend(
           `import { ${importedHelpers
@@ -51,7 +53,7 @@ export function processNormalScript(
     if (cssVars.length || genDefaultAs) {
       const defaultVar = genDefaultAs || normalScriptDefaultVar
       const s = new MagicString(content)
-      rewriteDefaultAST(scriptAST.body, s, defaultVar)
+      rewriteDefaultAST(scriptAst.body, s, defaultVar)
       content = s.toString()
       if (cssVars.length) {
         content += genNormalScriptCssVarsCode(
@@ -66,13 +68,12 @@ export function processNormalScript(
         content += `\nexport default ${defaultVar}`
       }
     }
-
     return {
       ...script,
       content,
       map,
       bindings,
-      scriptAST: scriptAST.body
+      scriptAst: scriptAst.body
     }
   } catch (e: any) {
     // silently fallback if parse fails since user may be using custom

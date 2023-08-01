@@ -1,12 +1,12 @@
 import { CallExpression, Node } from '@babel/types'
 import { TS_NODE_TYPES } from '@vue/compiler-dom'
 
-export type FromNormalScript<T> = T & { __fromNormalScript?: boolean | null }
 export const UNKNOWN_TYPE = 'Unknown'
+
 export function resolveObjectKey(node: Node, computed: boolean) {
   switch (node.type) {
     case 'StringLiteral':
-    case 'NumberLiteral':
+    case 'NumericLiteral':
       return String(node.value)
     case 'Identifier':
       if (!computed) return node.name
@@ -15,7 +15,7 @@ export function resolveObjectKey(node: Node, computed: boolean) {
 }
 
 export function concatStrings(strs: Array<string | null | undefined | false>) {
-  return strs.filter((s): s is string => !!s).join(',')
+  return strs.filter((s): s is string => !!s).join(', ')
 }
 
 export function isLiteralNode(node: Node) {
@@ -45,6 +45,6 @@ export function isCallOf(
   )
 }
 
-export function toRunTimeTypeString(types: string[]) {
+export function toRuntimeTypeString(types: string[]) {
   return types.length > 1 ? `[${types.join(', ')}]` : types[0]
 }

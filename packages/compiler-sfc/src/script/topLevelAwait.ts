@@ -34,7 +34,6 @@ import { ScriptCompileContext } from './context'
  * )
  * ```
  */
-
 export function processAwait(
   ctx: ScriptCompileContext,
   node: AwaitExpression,
@@ -45,12 +44,15 @@ export function processAwait(
     node.argument.extra && node.argument.extra.parenthesized
       ? (node.argument.extra.parenStart as number)
       : node.argument.start!
+
   const startOffset = ctx.startOffset!
   const argumentStr = ctx.descriptor.source.slice(
     argumentStart + startOffset,
     node.argument.end! + startOffset
   )
+
   const containsNestedAwait = /\bawait\b/.test(argumentStr)
+
   ctx.s.overwrite(
     node.start! + startOffset,
     argumentStart + startOffset,

@@ -1,20 +1,9 @@
+import { Identifier, LVal, Node, RestElement } from '@babel/types'
+import { isCallOf } from './utils'
 import { ScriptCompileContext } from './context'
 import { resolveTypeElements } from './resolveType'
-import { FromNormalScript, isCallOf } from './utils'
-import {
-  Identifier,
-  LVal,
-  Node,
-  RestElement,
-  TSFunctionType,
-  TSInterfaceBody,
-  TSTypeLiteral
-} from '@babel/types'
 
 export const DEFINE_EMITS = 'defineEmits'
-export type EmitsDeclType = FromNormalScript<
-  TSFunctionType | TSTypeLiteral | TSInterfaceBody
->
 
 export function processDefineEmits(
   ctx: ScriptCompileContext,
@@ -57,18 +46,50 @@ export function genRuntimeEmits(ctx: ScriptCompileContext): string | undefined {
     emitsDecl = typeDeclaredEmits.size
       ? `[${Array.from(typeDeclaredEmits)
           .map(k => JSON.stringify(k))
-          .join(',  ')}]`
+          .join(', ')}]`
       : ``
   }
   if (ctx.hasDefineModelCall) {
     let modelEmitsDecl = `[${Object.keys(ctx.modelDecls)
       .map(n => JSON.stringify(`update:${n}`))
-      .join(',  ')}]`
+      .join(', ')}]`
     emitsDecl = emitsDecl
       ? `${ctx.helper('mergeModels')}(${emitsDecl}, ${modelEmitsDecl})`
       : modelEmitsDecl
   }
   return emitsDecl
+}
+
+function extractRuntimeEmits(ctx: ScriptCompileContext): Set<string> {
+  const emits = new Set<string>()
+  const node = ctx.emitsTypeDecl!
+
+  if (node.type === 'TSFunctionType') {
+    extractEventNames(node.parameters[0], emits)
+    return emits
+  }
+
+  const elements = resolveTypeElements(ctx, node)
+
+  let hasProperty = false
+  for (const key in elements) {
+    emits.add(key)
+    hasProperty = true
+  }
+
+  if (elements.__callSignatures) {
+    if (hasProperty) {
+      ctx.error(
+        `defineEmits() type cannot mixed call signature and property syntax.`,
+        node
+      )
+    }
+    for (const call of elements.__callSignatures) {
+      extractEventNames(call.parameters[0], emits)
+    }
+  }
+
+  return emits
 }
 
 function extractEventNames(
@@ -100,36 +121,4 @@ function extractEventNames(
       }
     }
   }
-}
-
-function extractRuntimeEmits(ctx: ScriptCompileContext): Set<string> {
-  const emits = new Set<string>()
-  const node = ctx.emitsTypeDecl!
-  if (node.type === 'TSFunctionType') {
-    extractEventNames(node.parameters[0], emits)
-    return emits
-  }
-
-  const elements = resolveTypeElements(ctx, node)
-
-  let hasProperty = false
-  for (const key in elements) {
-    emits.add(key)
-    hasProperty = true
-  }
-
-  if (elements.__callSignatures) {
-    if (hasProperty) {
-      ctx.error(
-        `defineEmits() type cannot mixed call signature and property syntax.`,
-        node
-      )
-    }
-
-    for (const call of elements.__callSignatures) {
-      extractEventNames(call.parameters[0], emits)
-    }
-  }
-
-  return emits
 }

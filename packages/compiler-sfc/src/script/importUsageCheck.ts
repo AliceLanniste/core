@@ -1,10 +1,4 @@
-/**
- * Check if an import is used in the SFC's template. This is used to determine
- * the properties that should be included in the object returned from setup()
- * when not using inline mode.
- */
 import { parseExpression } from '@babel/parser'
-import { createCache } from '../cache'
 import { SFCDescriptor } from '../parse'
 import {
   NodeTypes,
@@ -14,8 +8,14 @@ import {
   transform,
   walkIdentifiers
 } from '@vue/compiler-dom'
+import { createCache } from '../cache'
 import { camelize, capitalize, isBuiltInDirective } from '@vue/shared'
 
+/**
+ * Check if an import is used in the SFC's template. This is used to determine
+ * the properties that should be included in the object returned from setup()
+ * when not using inline mode.
+ */
 export function isImportUsed(local: string, sfc: SFCDescriptor): boolean {
   return new RegExp(
     // #4274 escape $ since it's a special char in regex
@@ -26,11 +26,11 @@ export function isImportUsed(local: string, sfc: SFCDescriptor): boolean {
 
 const templateUsageCheckCache = createCache<string>()
 
-function resolveTemplateUsageCheckString(sfc: SFCDescriptor): string {
+function resolveTemplateUsageCheckString(sfc: SFCDescriptor) {
   const { content, ast } = sfc.template!
-  const cache = templateUsageCheckCache.get(content)
-  if (cache) {
-    return cache
+  const cached = templateUsageCheckCache.get(content)
+  if (cached) {
+    return cached
   }
 
   let code = ''
@@ -66,18 +66,20 @@ function resolveTemplateUsageCheckString(sfc: SFCDescriptor): string {
       }
     ]
   })
+
   code += ';'
   templateUsageCheckCache.set(content, code)
   return code
 }
 
 const forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+([\s\S]*)/
+
 function processExp(exp: string, dir?: string): string {
   if (/ as\s+\w|<.*>|:/.test(exp)) {
     if (dir === 'slot') {
-      exp = `(${exp} => {})`
+      exp = `(${exp})=>{}`
     } else if (dir === 'on') {
-      exp = `() => { return ${exp}}`
+      exp = `()=>{return ${exp}}`
     } else if (dir === 'for') {
       const inMatch = exp.match(forAliasRE)
       if (inMatch) {

@@ -1,22 +1,22 @@
-import { LVal, TSType, Node, ObjectProperty } from '@babel/types'
+import { LVal, Node, ObjectProperty, TSType } from '@babel/types'
 import { ScriptCompileContext } from './context'
 import { inferRuntimeType } from './resolveType'
 import {
   UNKNOWN_TYPE,
   concatStrings,
   isCallOf,
-  toRunTimeTypeString,
+  toRuntimeTypeString,
   unwrapTSNode
 } from './utils'
-import { BindingTypes } from '@vue/compiler-core'
+import { BindingTypes } from '@vue/compiler-dom'
+
+export const DEFINE_MODEL = 'defineModel'
 
 export interface ModelDecl {
   type: TSType | undefined
   options: string | undefined
   identifier: string | undefined
 }
-
-export const DEFINE_MODEL = 'defineModel'
 
 export function processDefineModel(
   ctx: ScriptCompileContext,
@@ -46,13 +46,13 @@ export function processDefineModel(
   }
 
   const optionsString = options && ctx.getString(options)
+
   ctx.modelDecls[modelName] = {
     type,
     options: optionsString,
     identifier: declId && declId.type === 'Identifier' ? declId.name : undefined
   }
-
-  //register binding type
+  // register binding type
   ctx.bindingMetadata[modelName] = BindingTypes.PROPS
 
   let runtimeOptions = ''
@@ -66,11 +66,11 @@ export function processDefineModel(
       ) as ObjectProperty
 
       if (local) {
-        runtimeOptions = `${ctx.getString(local)}`
+        runtimeOptions = `{ ${ctx.getString(local)} }`
       } else {
         for (const p of options.properties) {
           if (p.type === 'SpreadElement' || p.computed) {
-            runtimeOptions = optionsString
+            runtimeOptions = optionsString!
             break
           }
         }
@@ -87,6 +87,7 @@ export function processDefineModel(
       runtimeOptions ? `, ${runtimeOptions}` : ``
     })`
   )
+
   return true
 }
 
@@ -110,10 +111,11 @@ export function genModelProps(ctx: ScriptCompileContext) {
       })
       skipCheck = !isProd && hasUnknownType && runtimeTypes.length > 0
     }
+
     let runtimeType =
       (runtimeTypes &&
         runtimeTypes.length > 0 &&
-        toRunTimeTypeString(runtimeTypes)) ||
+        toRuntimeTypeString(runtimeTypes)) ||
       undefined
 
     const codegenOptions = concatStrings([
@@ -127,9 +129,9 @@ export function genModelProps(ctx: ScriptCompileContext) {
         ? `{ ${codegenOptions}, ...${options} }`
         : `Object.assign({ ${codegenOptions} }, ${options})`
     } else {
-      decl = options || (runtimeType ? `{ ${codegenOptions} }` : `{}`)
+      decl = options || (runtimeType ? `{ ${codegenOptions} }` : '{}')
     }
-    modelPropsDecl += `\n ${JSON.stringify(name)}: ${decl},`
+    modelPropsDecl += `\n    ${JSON.stringify(name)}: ${decl},`
   }
-  return `{${modelPropsDecl}\n }`
+  return `{${modelPropsDecl}\n  }`
 }

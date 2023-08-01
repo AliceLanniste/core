@@ -1,12 +1,17 @@
-import { BindingMetadata, BindingTypes } from '@vue/compiler-core'
 import {
   ArrayExpression,
   Node,
   ObjectExpression,
   Statement
 } from '@babel/types'
+import { BindingMetadata, BindingTypes } from '@vue/compiler-dom'
 import { resolveObjectKey } from './utils'
 
+/**
+ * Analyze bindings in normal `<script>`
+ * Note that `compileScriptSetup` already analyzes bindings as part of its
+ * compilation process so this should only be used on single `<script>` SFCs.
+ */
 export function analyzeScriptBindings(ast: Statement[]): BindingMetadata {
   for (const node of ast) {
     if (
@@ -21,45 +26,50 @@ export function analyzeScriptBindings(ast: Statement[]): BindingMetadata {
 
 function analyzeBindingsFromOptions(node: ObjectExpression): BindingMetadata {
   const bindings: BindingMetadata = {}
+  // #3270, #3275
   // mark non-script-setup so we don't resolve components/directives from these
   Object.defineProperty(bindings, '__isScriptSetup', {
     enumerable: false,
     value: false
   })
-
   for (const property of node.properties) {
     if (
       property.type === 'ObjectProperty' &&
       !property.computed &&
       property.key.type === 'Identifier'
     ) {
-      //props
+      // props
       if (property.key.name === 'props') {
-        //props:['foo']
-        //props: {foo: ...}
+        // props: ['foo']
+        // props: { foo: ... }
         for (const key of getObjectOrArrayExpressionKeys(property.value)) {
           bindings[key] = BindingTypes.PROPS
         }
-      } else if (property.key.name == 'inject') {
-        //inject: ['foo']
-        //inject: { foo: {} }
+      }
+
+      // inject
+      else if (property.key.name === 'inject') {
+        // inject: ['foo']
+        // inject: { foo: {} }
         for (const key of getObjectOrArrayExpressionKeys(property.value)) {
           bindings[key] = BindingTypes.OPTIONS
         }
       }
-      //computed && methods
+
+      // computed & methods
       else if (
         property.value.type === 'ObjectExpression' &&
         (property.key.name === 'computed' || property.key.name === 'methods')
       ) {
-        //methods: {foo() {} }
-        // computed: { foo() {}}
+        // methods: { foo() {} }
+        // computed: { foo() {} }
         for (const key of getObjectExpressionKeys(property.value)) {
           bindings[key] = BindingTypes.OPTIONS
         }
       }
     }
-    //setup & data
+
+    // setup & data
     else if (
       property.type === 'ObjectMethod' &&
       property.key.type === 'Identifier' &&
@@ -86,10 +96,11 @@ function analyzeBindingsFromOptions(node: ObjectExpression): BindingMetadata {
       }
     }
   }
+
   return bindings
 }
 
-export function getObjectExpressionKeys(node: ObjectExpression): string[] {
+function getObjectExpressionKeys(node: ObjectExpression): string[] {
   const keys = []
   for (const prop of node.properties) {
     if (prop.type === 'SpreadElement') continue

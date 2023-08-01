@@ -1,10 +1,10 @@
-import { ScriptCompileContext } from './context'
 import { Node } from '@babel/types'
-import { DEFINE_EMITS } from './defineEmits'
+import { ScriptCompileContext } from './context'
+import { isCallOf, unwrapTSNode } from './utils'
 import { DEFINE_PROPS } from './defineProps'
+import { DEFINE_EMITS } from './defineEmits'
 import { DEFINE_EXPOSE } from './defineExpose'
 import { DEFINE_SLOTS } from './defineSlots'
-import { isCallOf, unwrapTSNode } from './utils'
 
 export const DEFINE_OPTIONS = 'defineOptions'
 
@@ -25,6 +25,7 @@ export function processDefineOptions(
 
   ctx.hasDefineOptionsCall = true
   ctx.optionsRuntimeDecl = unwrapTSNode(node.arguments[0])
+
   let propsOption = undefined
   let emitsOption = undefined
   let exposeOption = undefined

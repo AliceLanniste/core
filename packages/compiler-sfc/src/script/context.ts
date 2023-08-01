@@ -1,35 +1,29 @@
 import { Node, ObjectPattern, Program } from '@babel/types'
 import { SFCDescriptor } from '../parse'
-import { ImportBinding, SFCScriptCompileOptions } from '../compileScript'
-import { parse as babelParse, ParserOptions, ParserPlugin } from '@babel/parser'
 import { generateCodeFrame } from '@vue/shared'
+import { parse as babelParse, ParserOptions, ParserPlugin } from '@babel/parser'
+import { ImportBinding, SFCScriptCompileOptions } from '../compileScript'
 import { PropsDestructureBindings } from './defineProps'
 import { ModelDecl } from './defineModel'
 import { BindingMetadata } from '../../../compiler-core/src'
-import { MagicString } from 'packages/vue/compiler-sfc'
+import MagicString from 'magic-string'
 import { TypeScope } from './resolveType'
+
 export class ScriptCompileContext {
   isJS: boolean
   isTS: boolean
 
-  scriptAST: Program | null
-  scriptSetupAST: Program | null
+  scriptAst: Program | null
+  scriptSetupAst: Program | null
 
+  s = new MagicString(this.descriptor.source)
   startOffset = this.descriptor.scriptSetup?.loc.start.offset
   endOffset = this.descriptor.scriptSetup?.loc.end.offset
 
-  s = new MagicString(this.descriptor.source)
-
-  //import / type analysis
+  // import / type analysis
   scope: TypeScope | undefined
   userImports: Record<string, ImportBinding> = Object.create(null)
-  helperImports: Set<string> = new Set()
-  helper(key: string): string {
-    this.helperImports.add(key)
-    return `_${key}`
-  }
 
-  declaredTypes: Record<string, string[]> = Object.create(null)
   // macros presence check
   hasDefinePropsCall = false
   hasDefineEmitCall = false
@@ -40,23 +34,35 @@ export class ScriptCompileContext {
   hasDefineSlotsCall = false
   hasDefineModelCall = false
 
+  // defineProps
   propsIdentifier: string | undefined
   propsRuntimeDecl: Node | undefined
-  propsDestructureDecl: ObjectPattern | undefined
   propsTypeDecl: Node | undefined
+  propsDestructureDecl: ObjectPattern | undefined
+  propsDestructuredBindings: PropsDestructureBindings = Object.create(null)
   propsDestructureRestId: string | undefined
   propsRuntimeDefaults: Node | undefined
-  propsDestructuredBindings: PropsDestructureBindings = Object.create(null)
-  // defineModel
-  modelDecls: Record<string, ModelDecl> = {}
+
   // defineEmits
   emitsRuntimeDecl: Node | undefined
   emitsTypeDecl: Node | undefined
   emitIdentifier: string | undefined
+
+  // defineModel
+  modelDecls: Record<string, ModelDecl> = {}
+
   // defineOptions
   optionsRuntimeDecl: Node | undefined
+
   // codegen
   bindingMetadata: BindingMetadata = {}
+
+  helperImports: Set<string> = new Set()
+  helper(key: string): string {
+    this.helperImports.add(key)
+    return `_${key}`
+  }
+
   constructor(
     public descriptor: SFCDescriptor,
     public options: SFCScriptCompileOptions
@@ -70,27 +76,24 @@ export class ScriptCompileContext {
       scriptLang === 'jsx' ||
       scriptSetupLang === 'js' ||
       scriptSetupLang === 'jsx'
-
     this.isTS =
       scriptLang === 'ts' ||
       scriptLang === 'tsx' ||
       scriptSetupLang === 'ts' ||
       scriptSetupLang === 'tsx'
 
-    //resolve parser plugins
-    //TODO:为什么要添加parserPlugin
+    // resolve parser plugins
     const plugins: ParserPlugin[] = []
     if (!this.isTS || scriptLang === 'tsx' || scriptSetupLang === 'tsx') {
       plugins.push('jsx')
     } else {
+      // If don't match the case of adding jsx, should remove the jsx from the babelParserPlugins
       if (options.babelParserPlugins)
         options.babelParserPlugins = options.babelParserPlugins.filter(
           n => n !== 'jsx'
         )
     }
-    if (options.babelParserPlugins) {
-      plugins.push(...options.babelParserPlugins)
-    }
+    if (options.babelParserPlugins) plugins.push(...options.babelParserPlugins)
     if (this.isTS) {
       plugins.push('typescript')
       if (!plugins.includes('decorators')) {
@@ -106,19 +109,18 @@ export class ScriptCompileContext {
       try {
         return babelParse(input, options).program
       } catch (e: any) {
-        e.message = `[@vue/compiler-sfc]${e.message}\n\n${
+        e.message = `[@vue/compiler-sfc] ${e.message}\n\n${
           descriptor.filename
         }\n${generateCodeFrame(
           descriptor.source,
           e.pos + offset,
           e.pos + offset + 1
         )}`
-
         throw e
       }
     }
 
-    this.scriptAST =
+    this.scriptAst =
       this.descriptor.script &&
       parse(
         this.descriptor.script.content,
@@ -129,10 +131,10 @@ export class ScriptCompileContext {
         this.descriptor.script.loc.start.offset
       )
 
-    this.scriptSetupAST =
+    this.scriptSetupAst =
       this.descriptor.scriptSetup &&
       parse(
-        this.descriptor.scriptSetup.content,
+        this.descriptor.scriptSetup!.content,
         {
           plugins: [...plugins, 'topLevelAwait'],
           sourceType: 'module'
@@ -153,14 +155,14 @@ export class ScriptCompileContext {
     node: Node,
     end: number = node.end! + this.startOffset!
   ): never {
-    throw new Error(`
-        [@vue/compiler-sfc]${msg}\n\n${
-      this.descriptor.filename
-    }\n${generateCodeFrame(
-      this.descriptor.source,
-      node.start! + this.startOffset!,
-      end
-    )}
-        `)
+    throw new Error(
+      `[@vue/compiler-sfc] ${msg}\n\n${
+        this.descriptor.filename
+      }\n${generateCodeFrame(
+        this.descriptor.source,
+        node.start! + this.startOffset!,
+        end
+      )}`
+    )
   }
 }

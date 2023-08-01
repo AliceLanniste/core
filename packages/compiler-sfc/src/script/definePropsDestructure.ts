@@ -16,12 +16,70 @@ import {
   isReferencedIdentifier,
   isStaticProperty,
   walkFunctionParams
-} from '@vue/compiler-core'
-import { isCallOf, resolveObjectKey, unwrapTSNode } from './utils'
+} from '@vue/compiler-dom'
 import { genPropsAccessExp } from '@vue/shared'
-// import { PropsDestructureBindings } from './defineProps'
+import { isCallOf, resolveObjectKey, unwrapTSNode } from './utils'
 import { ScriptCompileContext } from './context'
 import { DEFINE_PROPS } from './defineProps'
+
+export function processPropsDestructure(
+  ctx: ScriptCompileContext,
+  declId: ObjectPattern
+) {
+  ctx.propsDestructureDecl = declId
+
+  const registerBinding = (
+    key: string,
+    local: string,
+    defaultValue?: Expression
+  ) => {
+    ctx.propsDestructuredBindings[key] = { local, default: defaultValue }
+    if (local !== key) {
+      ctx.bindingMetadata[local] = BindingTypes.PROPS_ALIASED
+      ;(ctx.bindingMetadata.__propsAliases ||
+        (ctx.bindingMetadata.__propsAliases = {}))[local] = key
+    }
+  }
+
+  for (const prop of declId.properties) {
+    if (prop.type === 'ObjectProperty') {
+      const propKey = resolveObjectKey(prop.key, prop.computed)
+
+      if (!propKey) {
+        ctx.error(
+          `${DEFINE_PROPS}() destructure cannot use computed key.`,
+          prop.key
+        )
+      }
+
+      if (prop.value.type === 'AssignmentPattern') {
+        // default value { foo = 123 }
+        const { left, right } = prop.value
+        if (left.type !== 'Identifier') {
+          ctx.error(
+            `${DEFINE_PROPS}() destructure does not support nested patterns.`,
+            left
+          )
+        }
+        registerBinding(propKey, left.name, right)
+      } else if (prop.value.type === 'Identifier') {
+        // simple destructure
+        registerBinding(propKey, prop.value.name)
+      } else {
+        ctx.error(
+          `${DEFINE_PROPS}() destructure does not support nested patterns.`,
+          prop.value
+        )
+      }
+    } else {
+      // rest spread
+      ctx.propsDestructureRestId = (prop.argument as Identifier).name
+      // register binding
+      ctx.bindingMetadata[ctx.propsDestructureRestId] =
+        BindingTypes.SETUP_REACTIVE_CONST
+    }
+  }
+}
 
 /**
  * true -> prop binding
@@ -161,7 +219,7 @@ export function transformDestructuredProps(
   }
 
   // check root scope first
-  const ast = ctx.scriptSetupAST!
+  const ast = ctx.scriptSetupAst!
   walkScope(ast, true)
   ;(walk as any)(ast, {
     enter(node: Node, parent?: Node) {
@@ -229,60 +287,4 @@ export function transformDestructuredProps(
       }
     }
   })
-}
-
-export function processPropsDestructure(
-  ctx: ScriptCompileContext,
-  declId: ObjectPattern
-) {
-  ctx.propsDestructureDecl = declId
-  const registerBinding = (
-    key: string,
-    local: string,
-    defaultValue?: Expression
-  ) => {
-    ctx.propsDestructuredBindings[key] = { local, default: defaultValue }
-    if (local !== key) {
-      ctx.bindingMetadata[local] = BindingTypes.PROPS_ALIASED
-      ;(ctx.bindingMetadata.__propsAliases ||
-        (ctx.bindingMetadata.__propsAliases = {}))[local] = key
-    }
-  }
-  for (const prop of declId.properties) {
-    if (prop.type === 'ObjectProperty') {
-      const propKey = resolveObjectKey(prop.key, prop.computed)
-      if (!propKey) {
-        ctx.error(
-          `${DEFINE_PROPS}() destructure cannot use computed key.`,
-          prop.key
-        )
-      }
-
-      if (prop.value.type === 'AssignmentPattern') {
-        //default value { foo = 123}
-        const { left, right } = prop.value
-        if (left.type !== 'Identifier') {
-          ctx.error(
-            `${DEFINE_PROPS}() destructure does not support nested patterns.`,
-            left
-          )
-        }
-        registerBinding(propKey, left.name, right)
-      } else if (prop.value.type === 'Identifier') {
-        // simple destructure
-        registerBinding(propKey, prop.value.name)
-      } else {
-        ctx.error(
-          `${DEFINE_PROPS}() destructure does not support nested patterns.`,
-          prop.value
-        )
-      }
-    } else {
-      // rest spread
-      ctx.propsDestructureRestId = (prop.argument as Identifier).name
-      // register binding
-      ctx.bindingMetadata[ctx.propsDestructureRestId] =
-        BindingTypes.SETUP_REACTIVE_CONST
-    }
-  }
 }

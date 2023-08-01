@@ -12,10 +12,12 @@ import {
   TSTypeElement,
   TSTypeReference
 } from '@babel/types'
-
-import { ScriptCompileContext } from './context'
 import { UNKNOWN_TYPE } from './utils'
+import { ScriptCompileContext } from './context'
 import { ImportBinding } from '../compileScript'
+import { TSInterfaceDeclaration } from '@babel/types'
+import { hasOwn, isArray } from '@vue/shared'
+import { Expression } from '@babel/types'
 
 export interface TypeScope {
   filename: string
@@ -52,7 +54,8 @@ function innerResolveTypeElements(
   switch (node.type) {
     case 'TSTypeLiteral':
       return typeElementsToMap(ctx, node.members)
-
+    case 'TSInterfaceDeclaration':
+      return resolveInterfaceMembers(ctx, node)
     case 'TSTypeAliasDeclaration':
     case 'TSParenthesizedType':
       return resolveTypeElements(ctx, node.typeAnnotation)
@@ -61,20 +64,167 @@ function innerResolveTypeElements(
       addCallSignature(ret, node)
       return ret
     }
-    case 'TSExpressionWithTypeArguments':
+    case 'TSExpressionWithTypeArguments': // referenced by interface extends
     case 'TSTypeReference':
       return resolveTypeElements(ctx, resolveTypeReference(ctx, node))
+    case 'TSUnionType':
+    case 'TSIntersectionType':
+      return mergeElements(
+        node.types.map(t => resolveTypeElements(ctx, t)),
+        node.type
+      )
   }
   ctx.error(`Unsupported type in SFC macro: ${node.type}`, node)
+}
+
+function addCallSignature(
+  elements: ResolvedElements,
+  node:
+    | TSCallSignatureDeclaration
+    | TSFunctionType
+    | (TSCallSignatureDeclaration | TSFunctionType)[]
+) {
+  if (!elements.__callSignatures) {
+    Object.defineProperty(elements, '__callSignatures', {
+      enumerable: false,
+      value: isArray(node) ? node : [node]
+    })
+  } else {
+    if (isArray(node)) {
+      elements.__callSignatures.push(...node)
+    } else {
+      elements.__callSignatures.push(node)
+    }
+  }
+}
+
+function typeElementsToMap(
+  ctx: ScriptCompileContext,
+  elements: TSTypeElement[]
+): ResolvedElements {
+  const ret: ResolvedElements = {}
+  for (const e of elements) {
+    if (e.type === 'TSPropertySignature' || e.type === 'TSMethodSignature') {
+      const name =
+        e.key.type === 'Identifier'
+          ? e.key.name
+          : e.key.type === 'StringLiteral'
+          ? e.key.value
+          : null
+      if (name && !e.computed) {
+        ret[name] = e
+      } else {
+        ctx.error(
+          `computed keys are not supported in types referenced by SFC macros.`,
+          e
+        )
+      }
+    } else if (e.type === 'TSCallSignatureDeclaration') {
+      addCallSignature(ret, e)
+    }
+  }
+  return ret
+}
+
+function mergeElements(
+  maps: ResolvedElements[],
+  type: 'TSUnionType' | 'TSIntersectionType'
+): ResolvedElements {
+  const res: ResolvedElements = Object.create(null)
+  for (const m of maps) {
+    for (const key in m) {
+      if (!(key in res)) {
+        res[key] = m[key]
+      } else {
+        res[key] = createProperty(res[key].key, type, [res[key], m[key]])
+      }
+    }
+    if (m.__callSignatures) {
+      addCallSignature(res, m.__callSignatures)
+    }
+  }
+  return res
+}
+
+function createProperty(
+  key: Expression,
+  type: 'TSUnionType' | 'TSIntersectionType',
+  types: Node[]
+): TSPropertySignature {
+  return {
+    type: 'TSPropertySignature',
+    key,
+    kind: 'get',
+    typeAnnotation: {
+      type: 'TSTypeAnnotation',
+      typeAnnotation: {
+        type,
+        types: types as TSType[]
+      }
+    }
+  }
+}
+
+function resolveInterfaceMembers(
+  ctx: ScriptCompileContext,
+  node: TSInterfaceDeclaration
+): ResolvedElements {
+  const base = typeElementsToMap(ctx, node.body.body)
+  if (node.extends) {
+    for (const ext of node.extends) {
+      const resolvedExt = resolveTypeElements(ctx, ext)
+      for (const key in resolvedExt) {
+        if (!hasOwn(base, key)) {
+          base[key] = resolvedExt[key]
+        }
+      }
+    }
+  }
+  return base
+}
+
+function resolveTypeReference(
+  ctx: ScriptCompileContext,
+  node: TSTypeReference | TSExpressionWithTypeArguments,
+  scope?: TypeScope
+): Node
+function resolveTypeReference(
+  ctx: ScriptCompileContext,
+  node: TSTypeReference | TSExpressionWithTypeArguments,
+  scope: TypeScope,
+  bail: false
+): Node | undefined
+function resolveTypeReference(
+  ctx: ScriptCompileContext,
+  node: TSTypeReference | TSExpressionWithTypeArguments,
+  scope = getRootScope(ctx),
+  bail = true
+): Node | undefined {
+  const ref = node.type === 'TSTypeReference' ? node.typeName : node.expression
+  if (ref.type === 'Identifier') {
+    if (scope.imports[ref.name]) {
+      // TODO external import
+    } else if (scope.types[ref.name]) {
+      return scope.types[ref.name]
+    }
+  } else {
+    // TODO qualified name, e.g. Foo.Bar
+    // return resolveTypeReference()
+  }
+  if (bail) {
+    ctx.error('Failed to resolve type reference.', node)
+  }
 }
 
 function getRootScope(ctx: ScriptCompileContext): TypeScope {
   if (ctx.scope) {
     return ctx.scope
   }
-  const body = ctx.scriptAST
-    ? [...ctx.scriptSetupAST!.body, ...ctx.scriptSetupAST!.body]
-    : ctx.scriptSetupAST!.body
+
+  const body = ctx.scriptAst
+    ? [...ctx.scriptAst.body, ...ctx.scriptSetupAst!.body]
+    : ctx.scriptSetupAst!.body
+
   return (ctx.scope = {
     filename: ctx.descriptor.filename,
     imports: ctx.userImports,
@@ -91,9 +241,36 @@ function recordTypes(body: Statement[]) {
   return types
 }
 
-/**
- * 这个函数作用是让definProps<TypeParameter>(),将@param TypeParameter 转换成js的type
- */
+function recordType(node: Node, types: Record<string, Node>) {
+  switch (node.type) {
+    case 'TSInterfaceDeclaration':
+    case 'TSEnumDeclaration':
+      types[node.id.name] = node
+      break
+    case 'TSTypeAliasDeclaration':
+      types[node.id.name] = node.typeAnnotation
+      break
+    case 'ExportNamedDeclaration': {
+      if (node.exportKind === 'type') {
+        recordType(node.declaration!, types)
+      }
+      break
+    }
+    case 'VariableDeclaration': {
+      if (node.declare) {
+        for (const decl of node.declarations) {
+          if (decl.id.type === 'Identifier' && decl.id.typeAnnotation) {
+            types[decl.id.name] = (
+              decl.id.typeAnnotation as TSTypeAnnotation
+            ).typeAnnotation
+          }
+        }
+      }
+      break
+    }
+  }
+}
+
 export function inferRuntimeType(
   ctx: ScriptCompileContext,
   node: Node,
@@ -128,7 +305,11 @@ export function inferRuntimeType(
       }
       return types.size ? Array.from(types) : ['Object']
     }
-
+    case 'TSPropertySignature':
+      if (node.typeAnnotation) {
+        return inferRuntimeType(ctx, node.typeAnnotation.typeAnnotation)
+      }
+    case 'TSMethodSignature':
     case 'TSFunctionType':
       return ['Function']
     case 'TSArrayType':
@@ -145,7 +326,6 @@ export function inferRuntimeType(
         case 'NumericLiteral':
         case 'BigIntLiteral':
           return ['Number']
-
         default:
           return [UNKNOWN_TYPE]
       }
@@ -167,11 +347,12 @@ export function inferRuntimeType(
           case 'Date':
           case 'Promise':
             return [node.typeName.name]
+
           // TS built-in utility types
           // https://www.typescriptlang.org/docs/handbook/utility-types.html
           case 'Partial':
           case 'Required':
-          case 'ReadOnly':
+          case 'Readonly':
           case 'Record':
           case 'Pick':
           case 'Omit':
@@ -196,9 +377,7 @@ export function inferRuntimeType(
                 scope
               ).filter(t => t !== 'null')
             }
-
             break
-
           case 'Extract':
             if (node.typeParameters && node.typeParameters.params[1]) {
               return inferRuntimeType(ctx, node.typeParameters.params[1], scope)
@@ -225,13 +404,15 @@ export function inferRuntimeType(
         t => t !== UNKNOWN_TYPE
       )
     }
+
     case 'TSEnumDeclaration':
       return inferEnumType(node)
+
     case 'TSSymbolKeyword':
       return ['Symbol']
 
     default:
-      return [UNKNOWN_TYPE]
+      return [UNKNOWN_TYPE] // no runtime check
   }
 }
 
@@ -248,112 +429,6 @@ function flattenTypes(
     )
   ]
 }
-function typeElementsToMap(
-  ctx: ScriptCompileContext,
-  elements: TSTypeElement[]
-): ResolvedElements {
-  const ret: ResolvedElements = {}
-  for (const e of elements) {
-    if (e.type === 'TSPropertySignature' || e.type === 'TSMethodSignature') {
-      const name =
-        e.key.type === 'Identifier'
-          ? e.key.name
-          : e.key.type === 'StringLiteral'
-          ? e.key.value
-          : null
-      if (name && !e.computed) {
-        ret[name] = e
-      } else {
-        ctx.error(
-          `computed keys are not supported in types referenced by SFC macros.`,
-          e
-        )
-      }
-    } else if (e.type === 'TSCallSignatureDeclaration') {
-      addCallSignature(ret, e)
-    }
-  }
-  return ret
-}
-
-function addCallSignature(
-  elements: ResolvedElements,
-  node: TSCallSignatureDeclaration | TSFunctionType
-) {
-  if (!elements.__callSignatures) {
-    Object.defineProperty(elements, '__callSignatures', {
-      enumerable: false,
-      value: [node]
-    })
-  } else {
-    elements.__callSignatures.push(node)
-  }
-}
-
-function resolveTypeReference(
-  ctx: ScriptCompileContext,
-  node: TSTypeReference | TSExpressionWithTypeArguments,
-  scope?: TypeScope
-): Node
-function resolveTypeReference(
-  ctx: ScriptCompileContext,
-  node: TSTypeReference | TSExpressionWithTypeArguments,
-  scope: TypeScope,
-  bail: false
-): Node | undefined
-
-function resolveTypeReference(
-  ctx: ScriptCompileContext,
-  node: TSTypeReference | TSExpressionWithTypeArguments,
-  scope = getRootScope(ctx),
-  bail = true
-): Node | undefined {
-  const ref = node.type === 'TSTypeReference' ? node.typeName : node.expression
-  if (ref.type === 'Identifier') {
-    if (scope.imports[ref.name]) {
-      //todo external import
-    } else if (scope.types[ref.name]) {
-      return scope.types[ref.name]
-    }
-  } else {
-    // TODO qualified name, e.g. Foo.Bar
-    // return resolveTypeReference()
-  }
-
-  if (bail) {
-    ctx.error('Failed to resolve type reference.', node)
-  }
-}
-function recordType(node: Node, types: Record<string, Node>) {
-  switch (node.type) {
-    case 'TSInterfaceDeclaration':
-    case 'TSEnumDeclaration':
-      types[node.id.name] = node
-      break
-    case 'TSTypeAliasDeclaration':
-      types[node.id.name] = node.typeAnnotation
-      break
-    case 'ExportNamedDeclaration': {
-      if (node.exportKind === 'type') {
-        recordType(node.declaration!, types)
-      }
-      break
-    }
-    case 'VariableDeclaration':
-      {
-        if (node.declare) {
-          for (const decl of node.declarations) {
-            if (decl.id.type === 'Identifier' && decl.id.typeAnnotation) {
-              types[decl.id.name] = (
-                decl.id.typeAnnotation as TSTypeAnnotation
-              ).typeAnnotation
-            }
-          }
-        }
-      }
-      break
-  }
-}
 
 function inferEnumType(node: TSEnumDeclaration): string[] {
   const types = new Set<string>()
@@ -365,9 +440,9 @@ function inferEnumType(node: TSEnumDeclaration): string[] {
           break
         case 'NumericLiteral':
           types.add('Number')
+          break
       }
     }
   }
-
   return types.size ? [...types] : ['Number']
 }
