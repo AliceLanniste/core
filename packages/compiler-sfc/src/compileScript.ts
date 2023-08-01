@@ -28,8 +28,7 @@ import {
   Statement,
   CallExpression,
   RestElement,
-  TSInterfaceBody,
-  TSEnumDeclaration
+  TSInterfaceBody
 } from '@babel/types'
 import { walk } from 'estree-walker'
 import { RawSourceMap } from 'source-map'
@@ -54,7 +53,7 @@ import {
   ModelDecl
 } from './script/defineModel'
 import { isCallOf, resolveObjectKey, unwrapTSNode } from './script/utils'
-import { inferRuntimeType } from './script/resolveType'
+// import { inferRuntimeType } from './script/resolveType'
 import { processDefineSlots } from './script/defineSlots'
 import {
   DEFINE_EMITS,
@@ -200,7 +199,6 @@ export function compileScript(
   // metadata that needs to be returned
   // const ctx.bindingMetadata: ctx.bindingMetadata = {}
   const helperImports: Set<string> = new Set()
-  const userImports: Record<string, ImportBinding> = Object.create(null)
   const scriptBindings: Record<string, BindingTypes> = Object.create(null)
   const setupBindings: Record<string, BindingTypes> = Object.create(null)
 
@@ -284,7 +282,7 @@ export function compileScript(
       isUsedInTemplate = isImportUsed(local, sfc)
     }
 
-    userImports[local] = {
+    ctx.userImports[local] = {
       isType,
       imported,
       local,
@@ -365,7 +363,7 @@ export function compileScript(
         const local = specifier.local.name
         const imported = getImportedName(specifier)
         const source = node.source.value
-        const existing = userImports[local]
+        const existing = ctx.userImports[local]
         if (
           source === 'vue' &&
           (imported === DEFINE_PROPS ||
@@ -404,8 +402,8 @@ export function compileScript(
 
   // 1.3 resolve possible user import alias of `ref` and `reactive`
   const vueImportAliases: Record<string, string> = {}
-  for (const key in userImports) {
-    const { source, imported, local } = userImports[key]
+  for (const key in ctx.userImports) {
+    const { source, imported, local } = ctx.userImports[key]
     if (source === 'vue') vueImportAliases[imported] = local
   }
 
@@ -720,7 +718,6 @@ export function compileScript(
           node.exportKind === 'type') ||
         (node.type === 'VariableDeclaration' && node.declare)
       ) {
-        recordType(node, ctx.declaredTypes)
         if (node.type !== 'TSEnumDeclaration') {
           hoistNode(node)
         }
@@ -816,7 +813,7 @@ export function compileScript(
     }
   }
   for (const [key, { isType, imported, source }] of Object.entries(
-    userImports
+    ctx.userImports
   )) {
     if (isType) continue
     ctx.bindingMetadata[key] =
@@ -914,8 +911,11 @@ export function compileScript(
       ...scriptBindings,
       ...setupBindings
     }
-    for (const key in userImports) {
-      if (!userImports[key].isType && userImports[key].isUsedInTemplate) {
+    for (const key in ctx.userImports) {
+      if (
+        !ctx.userImports[key].isType &&
+        ctx.userImports[key].isUsedInTemplate
+      ) {
         allBindings[key] = true
       }
     }
@@ -923,8 +923,8 @@ export function compileScript(
     for (const key in allBindings) {
       if (
         allBindings[key] === true &&
-        userImports[key].source !== 'vue' &&
-        !userImports[key].source.endsWith('.vue')
+        ctx.userImports[key].source !== 'vue' &&
+        !ctx.userImports[key].source.endsWith('.vue')
       ) {
         // generate getter for import bindings
         // skip vue imports since we know they will never change
@@ -1102,7 +1102,7 @@ export function compileScript(
   return {
     ...scriptSetup,
     bindings: ctx.bindingMetadata,
-    imports: userImports,
+    imports: ctx.userImports,
     content: ctx.s.toString(),
     map:
       options.sourceMap !== false
@@ -1289,38 +1289,6 @@ function walkPattern(
       walkPattern(node.left, bindings, isConst)
     }
   }
-}
-
-function recordType(node: Node, declaredTypes: Record<string, string[]>) {
-  if (node.type === 'TSInterfaceDeclaration') {
-    declaredTypes[node.id.name] = [`Object`]
-  } else if (node.type === 'TSTypeAliasDeclaration') {
-    declaredTypes[node.id.name] = inferRuntimeType(
-      node.typeAnnotation,
-      declaredTypes
-    )
-  } else if (node.type === 'ExportNamedDeclaration' && node.declaration) {
-    recordType(node.declaration, declaredTypes)
-  } else if (node.type === 'TSEnumDeclaration') {
-    declaredTypes[node.id.name] = inferEnumType(node)
-  }
-}
-
-function inferEnumType(node: TSEnumDeclaration): string[] {
-  const types = new Set<string>()
-  for (const m of node.members) {
-    if (m.initializer) {
-      switch (m.initializer.type) {
-        case 'StringLiteral':
-          types.add('String')
-          break
-        case 'NumericLiteral':
-          types.add('Number')
-          break
-      }
-    }
-  }
-  return types.size ? [...types] : ['Number']
 }
 
 function extractRuntimeEmits(
