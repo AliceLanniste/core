@@ -190,9 +190,30 @@ describe('resolveType', () => {
     })
   })
 
-  // describe('built-in utility types', () => {
+  test('utility type: Pick', () => {
+    expect(
+      resolve(`
+    type T = { foo: number, bar: string, baz: boolean }
+    type K = 'foo' | 'bar'
+    type Target = Pick<T, K>
+    `).elements
+    ).toStrictEqual({
+      foo: ['Number'],
+      bar: ['String']
+    })
+  })
 
-  // })
+  test('utility type: Omit', () => {
+    expect(
+      resolve(`
+    type T = { foo: number, bar: string, baz: boolean }
+    type K = 'foo' | 'bar'
+    type Target = Omit<T, K>
+    `).elements
+    ).toStrictEqual({
+      baz: ['Boolean']
+    })
+  })
 
   describe('errors', () => {
     test('error on computed keys', () => {
